@@ -1,3 +1,5 @@
+import { EventEmitter } from 'events';
+
 import charwise from 'charwise';
 import chokidar from 'chokidar';
 import fs from 'fs';
@@ -188,13 +190,30 @@ export default function cardcatalog(indexes, opts = {}) {
     // exist when the watch began, so ensure it's there first.
     fs.mkdirSync(opts.dataPath, { recursive: true });
 
+    // 'idle' means the whole catalog is quiescent, not just the queue — the
+    // queue can momentarily drain while chokidar is still enumerating the
+    // initial sweep, and that doesn't count.
+    let sweepDone = false;
+
     const watcher = chokidar
         .watch(opts.dataPath)
         .on('add', queueUpdate)
         .on('change', queueUpdate)
-        .on('unlink', queueRemove);
+        .on('unlink', queueRemove)
+        .on('ready', () => {
+            sweepDone = true;
+            if (queue.size === 0 && queue.pending === 0) {
+                catalog.emit('idle');
+            }
+        });
 
-    return {
+    queue.on('idle', () => {
+        if (sweepDone) {
+            catalog.emit('idle');
+        }
+    });
+
+    const catalog = Object.assign(new EventEmitter(), {
         catalogs: Object.fromEntries(
             Object.entries(indexDbs).map(([indexName, levelDb]) => [
                 indexName,
@@ -273,7 +292,9 @@ export default function cardcatalog(indexes, opts = {}) {
             }
             return queue.add(() => updatePath(path, false, stats));
         },
-    };
+    });
+
+    return catalog;
 }
 
 function buildKey(id, x) {

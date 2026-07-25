@@ -20,7 +20,9 @@ Tests run against real temp directories (`fs.mkdtemp`) rather than a mock fs —
 
 ## Architecture
 
-`cardcatalog(indexes, opts)` takes a map of named index configs and returns `{ catalogs, close, reindex, dataPath, indexPath }`.
+`cardcatalog(indexes, opts)` takes a map of named index configs and returns an EventEmitter with `{ catalogs, close, reindex, dataPath, indexPath }`.
+
+The catalog emits `'idle'` whenever it goes fully quiescent: the initial sweep has finished enumerating AND the work queue has drained. The queue draining mid-sweep deliberately doesn't count (chokidar is still finding files), so the first `'idle'` doubles as a ready signal — `await once(catalog, 'idle')` guarantees every pre-existing document is queryable. It fires again after each later batch of changes is folded in.
 
 Data flow: chokidar watches `opts.dataPath` (default `./db`). File add/change/unlink events are pushed through a p-queue (concurrency 5) into `updatePath()`, which for each index runs the user-supplied `process(fileContent, emit, { path })`. Each `emit(key, value)` becomes a LevelDB entry whose key is `[...emittedKey, filePath]` (charwise-encoded), so a range scan from `[...queryKey, null]` to `[...queryKey, undefined]` finds all files that emitted a given key — that's how `catalogs.<name>.getMany(key)` works. `get(key)` is `getMany` that throws on multiple matches.
 

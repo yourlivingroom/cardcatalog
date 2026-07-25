@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import pathLib from 'node:path';
@@ -205,6 +206,44 @@ test('shouldIndex filters documents out', async (t) => {
         assert.ok(await catalog.catalogs.words.get('mu'), 'no match yet');
     });
     assert.equal(await catalog.catalogs.words.get('nu'), null);
+});
+
+test('idle fires once the initial sweep is fully indexed', async (t) => {
+    const rootDir = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+    const dataPath = pathLib.join(rootDir, 'db');
+    fs.mkdirSync(dataPath);
+    for (let i = 0; i < 20; i++) {
+        fs.writeFileSync(pathLib.join(dataPath, 'doc' + i), 'omicron' + i);
+    }
+
+    const catalog = cardcatalog(
+        { words: wordIndex },
+        { dataPath, indexPath: pathLib.join(rootDir, 'index') },
+    );
+    t.after(async () => {
+        await catalog.close();
+        fs.rmSync(rootDir, { recursive: true, force: true });
+    });
+
+    await once(catalog, 'idle');
+
+    // No polling: idle promises every pre-existing document is queryable.
+    for (let i = 0; i < 20; i++) {
+        assert.ok(
+            await catalog.catalogs.words.get('omicron' + i),
+            'doc' + i + ' not indexed at idle',
+        );
+    }
+});
+
+test('idle fires again after later changes are folded in', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+    await once(catalog, 'idle');
+
+    writeDoc(catalog, 'doc1', 'pi');
+    await once(catalog, 'idle');
+
+    assert.ok(await catalog.catalogs.words.get('pi'));
 });
 
 test('a throwing process() does not poison other documents', async (t) => {
