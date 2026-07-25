@@ -1,0 +1,5 @@
+node_modules/
+
+# Runtime data from the demo (default dataPath/indexPath)
+db/
+index/
