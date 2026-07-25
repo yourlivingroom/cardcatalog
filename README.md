@@ -1,5 +1,10 @@
 # cardcatalog
 
+<!-- Replace OWNER/REPO once this is pushed to GitHub. -->
+
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![Coverage](https://raw.githubusercontent.com/OWNER/REPO/badges/coverage.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
 Persistent, incrementally-maintained indexes over a directory of files.
 
 You tell cardcatalog what cards to write for each document; it keeps the
