@@ -246,6 +246,38 @@ test('idle fires again after later changes are folded in', async (t) => {
     assert.ok(await catalog.catalogs.words.get('pi'));
 });
 
+test('rapid updates to the same file do not interleave', async (t) => {
+    const catalog = makeCatalog(t, {
+        words: {
+            valueEncoding: 'json',
+            // Slow process() holds the first update's read-fileMeta/
+            // write-batch cycle open long enough for the second to land
+            // inside it if updates aren't serialized per file.
+            process: async (content, emit) => {
+                await new Promise((r) => setTimeout(r, 100));
+                wordIndex.process(content, emit);
+            },
+        },
+    });
+
+    const path = writeDoc(catalog, 'doc1', 'one');
+    const first = catalog.reindex(path);
+
+    // Give the first update time to read the old content, then rewrite
+    // with an explicitly bumped mtime — rapid writes can share a
+    // millisecond, which the updatedAt guard would treat as unchanged.
+    await new Promise((r) => setTimeout(r, 50));
+    fs.writeFileSync(path, 'two');
+    const future = new Date(Date.now() + 5000);
+    fs.utimesSync(path, future, future);
+    const second = catalog.reindex(path);
+
+    await Promise.all([first, second]);
+
+    assert.equal(await catalog.catalogs.words.get('one'), null);
+    assert.ok(await catalog.catalogs.words.get('two'));
+});
+
 test('a throwing process() does not poison other documents', async (t) => {
     const catalog = makeCatalog(t, {
         words: {

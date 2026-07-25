@@ -166,24 +166,48 @@ export default function cardcatalog(indexes, opts = {}) {
     const queue = new PQueue({ concurrency: 5 });
     queue.on('error', (e) => console.error('cardcatalog index error:', e));
 
+    // The queue lets updates to different files run in parallel, but two
+    // updates to the same file must not interleave their read-fileMeta /
+    // write-batch cycles — both would read the same starting fileMeta and the
+    // loser's emitted keys would be orphaned. Each file's updates therefore
+    // chain behind the previous one. The chain links up synchronously when
+    // the queue starts the task (start order is insertion order, so per-file
+    // FIFO holds), and the wait happens inside the task so the queue's
+    // pending count — which 'idle' watches — covers it.
+    const fileTails = new Map();
+
+    function queueFileUpdate(path, remove, stats) {
+        return queue.add(() => {
+            const tail = fileTails.get(path) ?? Promise.resolve();
+            const run = tail.then(() => updatePath(path, remove, stats));
+
+            const tracked = run
+                .catch(() => {})
+                .finally(() => {
+                    if (fileTails.get(path) === tracked) {
+                        fileTails.delete(path);
+                    }
+                });
+            fileTails.set(path, tracked);
+
+            return run;
+        });
+    }
+
     function queueRemove(path) {
         if (!opts.shouldIndex(path)) return;
         debug('watcher: unlink', path);
-        queue
-            .add(() => updatePath(path, true))
-            .catch((e) =>
-                console.error('cardcatalog remove failed for ' + path + ':', e),
-            );
+        queueFileUpdate(path, true).catch((e) =>
+            console.error('cardcatalog remove failed for ' + path + ':', e),
+        );
     }
 
     function queueUpdate(path, stats) {
         if (!opts.shouldIndex(path, stats)) return;
         debug('watcher: add/change', path);
-        queue
-            .add(() => updatePath(path, false, stats))
-            .catch((e) =>
-                console.error('cardcatalog update failed for ' + path + ':', e),
-            );
+        queueFileUpdate(path, false, stats).catch((e) =>
+            console.error('cardcatalog update failed for ' + path + ':', e),
+        );
     }
 
     // chokidar won't reliably pick up files created in a directory that didn't
@@ -286,11 +310,11 @@ export default function cardcatalog(indexes, opts = {}) {
                 stats = await fs.promises.stat(path);
             } catch (e) {
                 if (e.code === 'ENOENT') {
-                    return queue.add(() => updatePath(path, true));
+                    return queueFileUpdate(path, true);
                 }
                 throw e;
             }
-            return queue.add(() => updatePath(path, false, stats));
+            return queueFileUpdate(path, false, stats);
         },
     });
 
