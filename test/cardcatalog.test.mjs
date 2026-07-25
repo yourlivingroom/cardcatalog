@@ -192,6 +192,61 @@ test('compound keys support prefix queries', async (t) => {
     assert.deepEqual(prefixed.map((m) => m.indexValue).sort(), ['blue', 'red']);
 });
 
+test('getRange() scans between bounds', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    await catalog.reindex(writeDoc(catalog, 'doc1', 'apple'));
+    await catalog.reindex(writeDoc(catalog, 'doc2', 'banana'));
+    await catalog.reindex(writeDoc(catalog, 'doc3', 'cherry'));
+    await catalog.reindex(writeDoc(catalog, 'doc4', 'date'));
+
+    const words = catalog.catalogs.words;
+    const keys = async (range) =>
+        (await collect(words.getRange(range))).map((m) => m.key);
+
+    assert.deepEqual(await keys({ gte: 'banana', lte: 'cherry' }), [
+        'banana',
+        'cherry',
+    ]);
+    assert.deepEqual(await keys({ gt: 'banana', lt: 'date' }), ['cherry']);
+    assert.deepEqual(await keys({ gte: 'cherry' }), ['cherry', 'date']);
+    assert.deepEqual(await keys({ lt: 'banana' }), ['apple']);
+    assert.deepEqual(await keys({}), ['apple', 'banana', 'cherry', 'date']);
+});
+
+test('getRange() bounds address whole compound-key subtrees', async (t) => {
+    const catalog = makeCatalog(t, {
+        byTag: {
+            process: (content, emit) => {
+                for (const tag of content.toString('utf8').split(/\s+/g)) {
+                    if (tag) {
+                        emit(['tag', tag], tag);
+                    }
+                }
+            },
+        },
+    });
+
+    await catalog.reindex(writeDoc(catalog, 'doc1', 'a'));
+    await catalog.reindex(writeDoc(catalog, 'doc2', 'b'));
+    await catalog.reindex(writeDoc(catalog, 'doc3', 'c'));
+
+    const byTag = catalog.catalogs.byTag;
+    const values = async (range) =>
+        (await collect(byTag.getRange(range))).map((m) => m.indexValue);
+
+    // gt skips the whole ['tag', 'a'] subtree; lte includes all of
+    // ['tag', 'c']'s.
+    assert.deepEqual(await values({ gt: ['tag', 'a'], lte: ['tag', 'c'] }), [
+        'b',
+        'c',
+    ]);
+
+    // A bare ['tag'] bound addresses every tag at once.
+    assert.deepEqual(await values({ gte: ['tag'] }), ['a', 'b', 'c']);
+    assert.deepEqual(await values({ gt: ['tag'] }), []);
+});
+
 test('shouldIndex filters documents out', async (t) => {
     const catalog = makeCatalog(
         t,

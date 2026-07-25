@@ -259,6 +259,32 @@ export default function cardcatalog(indexes, opts = {}) {
         }
     });
 
+    async function* scanIndex(levelDb, indexName, iterOpts) {
+        const indexSublevel = await levelDb.sublevel('index', {
+            keyEncoding: charwise,
+            valueEncoding: indexes[indexName].valueEncoding ?? 'utf8',
+        });
+
+        for await (const [foundKey, levelVal] of indexSublevel.iterator(
+            iterOpts,
+        )) {
+            const relPath = foundKey[foundKey.length - 1];
+            const absPath = toAbsPath(relPath);
+            yield {
+                key:
+                    foundKey.length === 2 ? foundKey[0] : foundKey.slice(0, -1),
+                path: relPath,
+                indexValue: levelVal,
+                read(...args) {
+                    return fs.promises.readFile(absPath, ...args);
+                },
+                readSync(...args) {
+                    return fs.readFileSync(absPath, ...args);
+                },
+            };
+        }
+    }
+
     const catalog = Object.assign(new EventEmitter(), {
         catalogs: Object.fromEntries(
             Object.entries(indexDbs).map(([indexName, levelDb]) => [
@@ -278,42 +304,45 @@ export default function cardcatalog(indexes, opts = {}) {
                         return result;
                     },
                     async *getMany(queryKey) {
-                        if (!Array.isArray(queryKey)) {
-                            queryKey = [queryKey];
-                        }
-
-                        const indexSublevel = await levelDb.sublevel('index', {
-                            keyEncoding: charwise,
-                            valueEncoding:
-                                indexes[indexName].valueEncoding ?? 'utf8',
-                        });
-
-                        const levelIter = indexSublevel.iterator({
+                        queryKey = normalizeKey(queryKey);
+                        yield* scanIndex(levelDb, indexName, {
                             gte: [...queryKey, KEY_BOTTOM],
                             lte: [...queryKey, KEY_TOP],
                         });
+                    },
 
-                        for await (const [foundKey, levelVal] of levelIter) {
-                            const relPath = foundKey[foundKey.length - 1];
-                            const absPath = toAbsPath(relPath);
-                            yield {
-                                key:
-                                    foundKey.length === 2
-                                        ? foundKey[0]
-                                        : foundKey.slice(0, -1),
-                                path: relPath,
-                                indexValue: levelVal,
-                                read(...args) {
-                                    return fs.promises.readFile(
-                                        absPath,
-                                        ...args,
-                                    );
-                                },
-                                readSync(...args) {
-                                    return fs.readFileSync(absPath, ...args);
-                                },
-                            };
+                    // Range scan over emitted keys. Bounds inherit getMany's
+                    // prefix semantics: each bound addresses a key's whole
+                    // subtree, so gte/lte include the bounding key's subtree
+                    // while gt/lt skip past it entirely. Omitted bounds are
+                    // open ends; getRange() with no bounds scans the whole
+                    // index.
+                    async *getRange(range = {}) {
+                        const iterOpts = {};
+
+                        if (range.gte !== undefined) {
+                            iterOpts.gte = [
+                                ...normalizeKey(range.gte),
+                                KEY_BOTTOM,
+                            ];
                         }
+                        if (range.gt !== undefined) {
+                            iterOpts.gt = [...normalizeKey(range.gt), KEY_TOP];
+                        }
+                        if (range.lte !== undefined) {
+                            iterOpts.lte = [
+                                ...normalizeKey(range.lte),
+                                KEY_TOP,
+                            ];
+                        }
+                        if (range.lt !== undefined) {
+                            iterOpts.lt = [
+                                ...normalizeKey(range.lt),
+                                KEY_BOTTOM,
+                            ];
+                        }
+
+                        yield* scanIndex(levelDb, indexName, iterOpts);
                     },
                 },
             ]),
@@ -354,9 +383,9 @@ export default function cardcatalog(indexes, opts = {}) {
 }
 
 function buildKey(id, x) {
-    if (!Array.isArray(x)) {
-        x = [x];
-    }
+    return [...normalizeKey(x), id];
+}
 
-    return [...x, id];
+function normalizeKey(x) {
+    return Array.isArray(x) ? x : [x];
 }
