@@ -45,6 +45,26 @@ export default function cardcatalog(indexes, opts = {}) {
         opts,
     );
 
+    // Documents are identified everywhere — index keys, fileMeta, the public
+    // API — by their dataPath-relative path, computed lexically. Physical
+    // canonicalization (realpath) is deliberately avoided: it needs search
+    // permission on every ancestor directory and fails outright on deleted
+    // files, which is exactly the remove case.
+    opts.dataPath = pathLib.resolve(opts.dataPath);
+
+    // Relative inputs are taken as dataPath-relative already; absolute ones
+    // are made relative. Both lexically.
+    function toRelPath(path) {
+        return pathLib.relative(
+            opts.dataPath,
+            pathLib.resolve(opts.dataPath, path),
+        );
+    }
+
+    function toAbsPath(relPath) {
+        return pathLib.join(opts.dataPath, relPath);
+    }
+
     const indexDbs = Object.fromEntries(
         Object.entries(indexes).map(([k]) => [
             k,
@@ -52,10 +72,10 @@ export default function cardcatalog(indexes, opts = {}) {
         ]),
     );
 
-    async function updatePath(path, remove, stats) {
+    async function updatePath(relPath, remove, stats) {
         const fileContent = remove
             ? undefined
-            : await fs.promises.readFile(path);
+            : await fs.promises.readFile(toAbsPath(relPath));
 
         for (const k of Object.keys(indexes)) {
             const indexConfig = indexes[k];
@@ -63,14 +83,14 @@ export default function cardcatalog(indexes, opts = {}) {
             const fileMeta =
                 (await indexDbs[k]
                     .sublevel('fileMeta')
-                    .get(path, { valueEncoding: 'json' })) ?? {};
+                    .get(relPath, { valueEncoding: 'json' })) ?? {};
 
             if (
                 !remove &&
                 fileMeta.updatedAt &&
                 fileMeta.updatedAt >= new Date(stats.mtimeMs).toISOString()
             ) {
-                debug('For index ' + k + ' skipping ' + path + '.');
+                debug('For index ' + k + ' skipping ' + relPath + '.');
                 continue;
             }
 
@@ -80,12 +100,12 @@ export default function cardcatalog(indexes, opts = {}) {
                 try {
                     await indexes[k].process(
                         fileContent,
-                        (k, v) => emitted.push([buildKey(path, k), v]),
-                        { path },
+                        (k, v) => emitted.push([buildKey(relPath, k), v]),
+                        { path: relPath },
                     );
                 } catch (e) {
                     await indexDbs[k].sublevel('problemDocuments').put(
-                        path,
+                        relPath,
                         {
                             at: new Date().toISOString(),
                             message: e.message,
@@ -96,7 +116,7 @@ export default function cardcatalog(indexes, opts = {}) {
                 }
             }
 
-            debug('\nFor index ' + k + ' updating ' + path + '.');
+            debug('\nFor index ' + k + ' updating ' + relPath + '.');
             debug('Deleting', fileMeta.indexKeys ?? []);
             debug('Emitting', emitted);
 
@@ -134,25 +154,25 @@ export default function cardcatalog(indexes, opts = {}) {
                     type: 'put',
                     sublevel: reverseIndexSublevel,
                     key,
-                    value: path,
+                    value: relPath,
                     keyEncoding: charwise,
                     valueEncoding: 'utf8',
                 })),
                 {
                     type: 'del',
                     sublevel: problemDocumentsSublevel,
-                    key: path,
+                    key: relPath,
                 },
                 remove
                     ? {
                           type: 'del',
                           sublevel: fileMetaSublevel,
-                          key: path,
+                          key: relPath,
                       }
                     : {
                           type: 'put',
                           sublevel: fileMetaSublevel,
-                          key: path,
+                          key: relPath,
                           value: {
                               indexKeys: emitted.map(([k]) => k),
                               updatedAt: new Date(stats.mtimeMs).toISOString(),
@@ -176,37 +196,39 @@ export default function cardcatalog(indexes, opts = {}) {
     // pending count — which 'idle' watches — covers it.
     const fileTails = new Map();
 
-    function queueFileUpdate(path, remove, stats) {
+    function queueFileUpdate(relPath, remove, stats) {
         return queue.add(() => {
-            const tail = fileTails.get(path) ?? Promise.resolve();
-            const run = tail.then(() => updatePath(path, remove, stats));
+            const tail = fileTails.get(relPath) ?? Promise.resolve();
+            const run = tail.then(() => updatePath(relPath, remove, stats));
 
             const tracked = run
                 .catch(() => {})
                 .finally(() => {
-                    if (fileTails.get(path) === tracked) {
-                        fileTails.delete(path);
+                    if (fileTails.get(relPath) === tracked) {
+                        fileTails.delete(relPath);
                     }
                 });
-            fileTails.set(path, tracked);
+            fileTails.set(relPath, tracked);
 
             return run;
         });
     }
 
     function queueRemove(path) {
-        if (!opts.shouldIndex(path)) return;
-        debug('watcher: unlink', path);
-        queueFileUpdate(path, true).catch((e) =>
-            console.error('cardcatalog remove failed for ' + path + ':', e),
+        const relPath = toRelPath(path);
+        if (!opts.shouldIndex(relPath)) return;
+        debug('watcher: unlink', relPath);
+        queueFileUpdate(relPath, true).catch((e) =>
+            console.error('cardcatalog remove failed for ' + relPath + ':', e),
         );
     }
 
     function queueUpdate(path, stats) {
-        if (!opts.shouldIndex(path, stats)) return;
-        debug('watcher: add/change', path);
-        queueFileUpdate(path, false, stats).catch((e) =>
-            console.error('cardcatalog update failed for ' + path + ':', e),
+        const relPath = toRelPath(path);
+        if (!opts.shouldIndex(relPath, stats)) return;
+        debug('watcher: add/change', relPath);
+        queueFileUpdate(relPath, false, stats).catch((e) =>
+            console.error('cardcatalog update failed for ' + relPath + ':', e),
         );
     }
 
@@ -272,19 +294,23 @@ export default function cardcatalog(indexes, opts = {}) {
                         });
 
                         for await (const [foundKey, levelVal] of levelIter) {
-                            const path = foundKey[foundKey.length - 1];
+                            const relPath = foundKey[foundKey.length - 1];
+                            const absPath = toAbsPath(relPath);
                             yield {
                                 key:
                                     foundKey.length === 2
                                         ? foundKey[0]
                                         : foundKey.slice(0, -1),
-                                path: pathLib.relative(opts.dataPath, path),
+                                path: relPath,
                                 indexValue: levelVal,
                                 read(...args) {
-                                    return fs.promises.readFile(path, ...args);
+                                    return fs.promises.readFile(
+                                        absPath,
+                                        ...args,
+                                    );
                                 },
                                 readSync(...args) {
-                                    return fs.readFileSync(path, ...args);
+                                    return fs.readFileSync(absPath, ...args);
                                 },
                             };
                         }
@@ -304,17 +330,23 @@ export default function cardcatalog(indexes, opts = {}) {
         // index to reflect its change synchronously instead of waiting for the
         // watcher. Goes through the same queue as watcher-driven updates (so no
         // race), and is idempotent with them. A missing file means "removed".
+        // Takes a dataPath-relative or absolute path.
         async reindex(path) {
+            const relPath = toRelPath(path);
+            if (relPath.startsWith('..') || pathLib.isAbsolute(relPath)) {
+                throw new Error('reindex path is outside dataPath: ' + path);
+            }
+
             let stats;
             try {
-                stats = await fs.promises.stat(path);
+                stats = await fs.promises.stat(toAbsPath(relPath));
             } catch (e) {
                 if (e.code === 'ENOENT') {
-                    return queueFileUpdate(path, true);
+                    return queueFileUpdate(relPath, true);
                 }
                 throw e;
             }
-            return queueFileUpdate(path, false, stats);
+            return queueFileUpdate(relPath, false, stats);
         },
     });
 

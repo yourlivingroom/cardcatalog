@@ -246,6 +246,45 @@ test('idle fires again after later changes are folded in', async (t) => {
     assert.ok(await catalog.catalogs.words.get('pi'));
 });
 
+test('reindex() accepts dataPath-relative paths', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    writeDoc(catalog, 'doc1', 'rho');
+    await catalog.reindex('doc1');
+
+    assert.ok(await catalog.catalogs.words.get('rho'));
+});
+
+test('reindex() rejects paths outside dataPath', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    await assert.rejects(
+        () => catalog.reindex('../escaped'),
+        /outside dataPath/,
+    );
+    await assert.rejects(
+        () => catalog.reindex('/etc/passwd'),
+        /outside dataPath/,
+    );
+});
+
+test('absolute and relative spellings are one identity', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    const absPath = writeDoc(catalog, 'doc1', 'sigma');
+    await catalog.reindex(absPath);
+
+    fs.writeFileSync(absPath, 'tau');
+    const future = new Date(Date.now() + 5000);
+    fs.utimesSync(absPath, future, future);
+    await catalog.reindex('doc1');
+
+    // If the two spellings were keyed separately, 'sigma' would survive as
+    // an orphan of the absolute-path identity.
+    assert.equal(await catalog.catalogs.words.get('sigma'), null);
+    assert.ok(await catalog.catalogs.words.get('tau'));
+});
+
 test('rapid updates to the same file do not interleave', async (t) => {
     const catalog = makeCatalog(t, {
         words: {
