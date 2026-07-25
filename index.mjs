@@ -295,7 +295,16 @@ export default function cardcatalog(indexes, opts = {}) {
 
                         for await (const match of this.getMany(key)) {
                             if (result) {
-                                throw new Error('Multiple matches');
+                                throw new Error(
+                                    'Multiple matches for ' +
+                                        JSON.stringify(key) +
+                                        ' in index ' +
+                                        JSON.stringify(indexName) +
+                                        ': ' +
+                                        result.path +
+                                        ', ' +
+                                        match.path,
+                                );
                             }
 
                             result = match;

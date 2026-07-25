@@ -152,7 +152,7 @@ test('get() returns null on no match and throws on several', async (t) => {
     assert.equal(await catalog.catalogs.words.get('nope'), null);
     await assert.rejects(
         () => catalog.catalogs.words.get('iota'),
-        /Multiple matches/,
+        /Multiple matches for "iota" in index "words": doc1, doc2/,
     );
 });
 
