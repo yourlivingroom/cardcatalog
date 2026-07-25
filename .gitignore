@@ -1,4 +1,5 @@
 node_modules/
+.claude/settings.local.json
 
 # Hacky dev scripts and their runtime data
 scratch/

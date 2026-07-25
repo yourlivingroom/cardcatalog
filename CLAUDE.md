@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Smoke test / demo: `node scratch/hack.mjs` (watches `scratch/db`, builds a word index in `scratch/index`, queries for "foo")
 - Debug logging: set `CARDCATALOG_DEBUG=1` to enable per-document index bookkeeping output
+- Format: `npm run format` (prettier; check-only via `npm run format:check`)
 - There are no tests and no linter (`npm test` is the placeholder that exits 1)
 
 ## Architecture
