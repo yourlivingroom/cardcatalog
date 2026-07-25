@@ -7,7 +7,7 @@
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "lint": "eslint . --max-warnings 0",
-        "test": "echo \"Error: no test specified\" && exit 1"
+        "test": "node --test --test-reporter=@voxpelli/node-test-pretty-reporter"
     },
     "author": "",
     "license": "ISC",
@@ -19,6 +19,7 @@
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
+        "@voxpelli/node-test-pretty-reporter": "^1.1.2",
         "eslint": "^10.8.0",
         "globals": "^17.7.0",
         "prettier": "^3.9.6"

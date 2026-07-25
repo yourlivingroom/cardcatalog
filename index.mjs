@@ -251,6 +251,8 @@ export default function cardcatalog(indexes, opts = {}) {
         ),
         close: async () => {
             await watcher.close();
+            await queue.onIdle();
+            await Promise.all(Object.values(indexDbs).map((db) => db.close()));
         },
         dataPath: opts.dataPath,
         indexPath: opts.indexPath,

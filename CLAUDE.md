@@ -10,9 +10,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Smoke test / demo: `node scratch/hack.mjs` (watches `scratch/db`, builds a word index in `scratch/index`, queries for "foo")
 - Debug logging: set `CARDCATALOG_DEBUG=1` to enable per-document index bookkeeping output
+- Test: `npm test` (node:test over `test/`); single file: `node --test test/cardcatalog.test.mjs`; single test: add `--test-name-pattern="<name>"`
 - Format: `npm run format` (prettier; check-only via `npm run format:check`)
 - Lint: `npm run lint` (eslint, zero warnings tolerated)
-- There are no tests (`npm test` is the placeholder that exits 1)
+
+## Testing approach
+
+Tests run against real temp directories (`fs.mkdtemp`) rather than a mock fs — chokidar's native watchers don't see fake filesystems (mock-fs explicitly doesn't support `fs.watch`). Watcher-driven assertions poll via the `eventually()` helper; most tests use `reindex()` instead for determinism. Each test's `t.after` closes the catalog — `close()` drains the queue and closes the LevelDB handles, which is what lets the test process exit.
 
 ## Architecture
 
