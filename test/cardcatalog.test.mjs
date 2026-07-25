@@ -214,6 +214,39 @@ test('getRange() scans between bounds', async (t) => {
     assert.deepEqual(await keys({}), ['apple', 'banana', 'cherry', 'date']);
 });
 
+test('getRange() supports reverse and limit', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    await catalog.reindex(writeDoc(catalog, 'doc1', 'apple'));
+    await catalog.reindex(writeDoc(catalog, 'doc2', 'banana'));
+    await catalog.reindex(writeDoc(catalog, 'doc3', 'cherry'));
+    await catalog.reindex(writeDoc(catalog, 'doc4', 'date'));
+
+    const words = catalog.catalogs.words;
+    const keys = async (range) =>
+        (await collect(words.getRange(range))).map((m) => m.key);
+
+    assert.deepEqual(await keys({ reverse: true }), [
+        'date',
+        'cherry',
+        'banana',
+        'apple',
+    ]);
+    assert.deepEqual(await keys({ limit: 2 }), ['apple', 'banana']);
+    assert.deepEqual(await keys({ reverse: true, limit: 2 }), [
+        'date',
+        'cherry',
+    ]);
+    assert.deepEqual(await keys({ gte: 'banana', reverse: true, limit: 2 }), [
+        'date',
+        'cherry',
+    ]);
+    assert.deepEqual(await keys({ lte: 'cherry', reverse: true, limit: 2 }), [
+        'cherry',
+        'banana',
+    ]);
+});
+
 test('getRange() bounds address whole compound-key subtrees', async (t) => {
     const catalog = makeCatalog(t, {
         byTag: {

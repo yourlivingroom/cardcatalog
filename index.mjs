@@ -316,7 +316,9 @@ export default function cardcatalog(indexes, opts = {}) {
                     // subtree, so gte/lte include the bounding key's subtree
                     // while gt/lt skip past it entirely. Omitted bounds are
                     // open ends; getRange() with no bounds scans the whole
-                    // index.
+                    // index. reverse walks the range high-to-low; limit caps
+                    // the number of entries yielded (per emitted entry, not
+                    // per distinct key), and applies after reversal.
                     async *getRange(range = {}) {
                         const iterOpts = {};
 
@@ -340,6 +342,12 @@ export default function cardcatalog(indexes, opts = {}) {
                                 ...normalizeKey(range.lt),
                                 KEY_BOTTOM,
                             ];
+                        }
+                        if (range.reverse !== undefined) {
+                            iterOpts.reverse = range.reverse;
+                        }
+                        if (range.limit !== undefined) {
+                            iterOpts.limit = range.limit;
                         }
 
                         yield* scanIndex(levelDb, indexName, iterOpts);
