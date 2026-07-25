@@ -1,5 +1,4 @@
 node_modules/
 
-# Runtime data from the demo (default dataPath/indexPath)
-db/
-index/
+# Hacky dev scripts and their runtime data
+scratch/
