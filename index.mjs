@@ -44,7 +44,7 @@ export default function cardcatalog(indexes, opts = {}) {
     );
 
     const indexDbs = Object.fromEntries(
-        Object.entries(indexes).map(([k, v]) => [
+        Object.entries(indexes).map(([k]) => [
             k,
             new ClassicLevel(pathLib.join(opts.indexPath, k)),
         ]),
@@ -128,7 +128,7 @@ export default function cardcatalog(indexes, opts = {}) {
                     keyEncoding: charwise,
                     valueEncoding: indexConfig.valueEncoding ?? 'utf8',
                 })),
-                ...emitted.map(([key, value]) => ({
+                ...emitted.map(([key]) => ({
                     type: 'put',
                     sublevel: reverseIndexSublevel,
                     key,
