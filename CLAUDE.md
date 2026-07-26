@@ -14,7 +14,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Coverage: `npm run coverage` (c8, enforces 100% on every metric via `--100`; `tools/coverage-badge.mjs` renders `coverage/coverage-summary.json` as an SVG badge, published by CI to the `badges` branch). The `CARDCATALOG_DEBUG` branch binds `console.log` at module load, which is why `test/debug-logging.test.mjs` is a separate file — it needs its own process to set the env var and stub the logger before import.
 - Typecheck: `npm run typecheck` (tsc --noEmit over `index.d.mts` + `test-d/index.test-d.ts`)
 - Format: `npm run format` (prettier; check-only via `npm run format:check`)
-- Lint: `npm run lint` (eslint, zero warnings tolerated)
+- Lint: `npm run lint` (eslint, zero warnings tolerated; `npx eslint . --fix` autofixes import order)
+
+Import style is enforced, not conventional: whole-module (default) imports first, then destructuring (named) ones, each block alphabetized by module name with a blank line between, and no imports below the first statement (`perfectionist/sort-imports` + `import-x/first`). Sorting is by module name, not local binding, so e.g. `p-queue` precedes `path`.
 
 ## Testing approach
 

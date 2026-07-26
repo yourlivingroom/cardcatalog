@@ -1,11 +1,11 @@
+import cardcatalog from '../index.mjs';
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import pathLib from 'node:path';
-import { test } from 'node:test';
 
-import cardcatalog from '../index.mjs';
+import { once } from 'node:events';
+import { test } from 'node:test';
 
 const wordIndex = {
     valueEncoding: 'json',

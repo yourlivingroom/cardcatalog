@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import pathLib from 'node:path';
+
 import { test } from 'node:test';
 
 // The debug logger is chosen at module load, so the env var must be set (and

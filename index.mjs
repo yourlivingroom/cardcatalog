@@ -1,16 +1,15 @@
-import { EventEmitter } from 'events';
-
 import charwise from 'charwise';
 import chokidar from 'chokidar';
 import fs from 'fs';
-import pathLib from 'path';
 import PQueue from 'p-queue';
+import pathLib from 'path';
+
+import { ClassicLevel } from 'classic-level';
+import { EventEmitter } from 'events';
 
 // npm release of charwise seems not to expose these
 const KEY_BOTTOM = null;
 const KEY_TOP = undefined;
-
-import { ClassicLevel } from 'classic-level';
 
 // Per-document index bookkeeping is verbose; keep it off unless debugging.
 const debug = process.env.CARDCATALOG_DEBUG
