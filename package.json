@@ -1,8 +1,34 @@
 {
     "name": "@livingroom/cardcatalog",
     "version": "0.0.1",
-    "description": "",
+    "description": "Persistent, incrementally-maintained LevelDB indexes over a watched directory",
+    "keywords": [
+        "index",
+        "indexer",
+        "leveldb",
+        "level",
+        "chokidar",
+        "watch",
+        "directory",
+        "materialized-view"
+    ],
+    "homepage": "https://github.com/yourlivingroom/cardcatalog#readme",
+    "bugs": "https://github.com/yourlivingroom/cardcatalog/issues",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/yourlivingroom/cardcatalog.git"
+    },
+    "license": "ISC",
+    "author": "Hampton Smith <hampton.w.smith@gmail.com>",
+    "type": "module",
+    "exports": "./index.mjs",
     "main": "index.mjs",
+    "files": [
+        "index.mjs"
+    ],
+    "engines": {
+        "node": ">=20"
+    },
     "scripts": {
         "coverage": "c8 --100 --reporter=text --reporter=json-summary npm test",
         "format": "prettier --write .",
@@ -10,8 +36,6 @@
         "lint": "eslint . --max-warnings 0",
         "test": "node --test --test-reporter=@voxpelli/node-test-pretty-reporter"
     },
-    "author": "",
-    "license": "ISC",
     "dependencies": {
         "charwise": "^3.0.1",
         "chokidar": "^5.0.0",
