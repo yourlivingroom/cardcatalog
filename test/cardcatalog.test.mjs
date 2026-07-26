@@ -89,6 +89,21 @@ test('watcher indexes pre-existing files', async (t) => {
     assert.equal(match.path, 'doc1');
     assert.equal(match.indexValue, true);
     assert.equal((await match.read('utf8')).toString(), 'alpha beta');
+    assert.equal(match.readSync('utf8'), 'alpha beta');
+});
+
+test('watcher removes entries for deleted files', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    const path = writeDoc(catalog, 'doc1', 'upsilon');
+    await eventually(async () => {
+        assert.ok(await catalog.catalogs.words.get('upsilon'), 'not indexed');
+    });
+
+    fs.unlinkSync(path);
+    await eventually(async () => {
+        assert.equal(await catalog.catalogs.words.get('upsilon'), null);
+    });
 });
 
 test('watcher picks up files created after startup', async (t) => {
@@ -287,13 +302,20 @@ test('shouldIndex filters documents out', async (t) => {
         { shouldIndex: (path) => !path.endsWith('.skip') },
     );
 
-    writeDoc(catalog, 'doc1', 'mu');
-    writeDoc(catalog, 'doc2.skip', 'nu');
+    const kept = writeDoc(catalog, 'doc1', 'mu');
+    const skipped = writeDoc(catalog, 'doc2.skip', 'nu');
 
     await eventually(async () => {
         assert.ok(await catalog.catalogs.words.get('mu'), 'no match yet');
     });
     assert.equal(await catalog.catalogs.words.get('nu'), null);
+
+    // Unlink events go through the same filter.
+    fs.unlinkSync(skipped);
+    fs.unlinkSync(kept);
+    await eventually(async () => {
+        assert.equal(await catalog.catalogs.words.get('mu'), null);
+    });
 });
 
 test('idle fires once the initial sweep is fully indexed', async (t) => {
@@ -354,6 +376,18 @@ test('reindex() rejects paths outside dataPath', async (t) => {
         () => catalog.reindex('/etc/passwd'),
         /outside dataPath/,
     );
+});
+
+test('reindex() rethrows stat errors other than ENOENT', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    writeDoc(catalog, 'doc1', 'phi');
+
+    // doc1 is a file, so statting a path under it is ENOTDIR — a real error,
+    // not "the document was removed".
+    await assert.rejects(() => catalog.reindex('doc1/child'), {
+        code: 'ENOTDIR',
+    });
 });
 
 test('absolute and relative spellings are one identity', async (t) => {

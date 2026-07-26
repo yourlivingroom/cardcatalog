@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Smoke test / demo: `node scratch/hack.mjs` (watches `scratch/db`, builds a word index in `scratch/index`, queries for "foo")
 - Debug logging: set `CARDCATALOG_DEBUG=1` to enable per-document index bookkeeping output
 - Test: `npm test` (node:test over `test/`); single file: `node --test test/cardcatalog.test.mjs`; single test: add `--test-name-pattern="<name>"`
-- Coverage: `npm run coverage` (c8; `tools/coverage-badge.mjs` renders `coverage/coverage-summary.json` as an SVG badge, published by CI to the `badges` branch)
+- Coverage: `npm run coverage` (c8, enforces 100% on every metric via `--100`; `tools/coverage-badge.mjs` renders `coverage/coverage-summary.json` as an SVG badge, published by CI to the `badges` branch). The `CARDCATALOG_DEBUG` branch binds `console.log` at module load, which is why `test/debug-logging.test.mjs` is a separate file — it needs its own process to set the env var and stub the logger before import.
 - Format: `npm run format` (prettier; check-only via `npm run format:check`)
 - Lint: `npm run lint` (eslint, zero warnings tolerated)
 

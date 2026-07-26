@@ -4,7 +4,7 @@
     "description": "",
     "main": "index.mjs",
     "scripts": {
-        "coverage": "c8 --reporter=text --reporter=json-summary npm test",
+        "coverage": "c8 --100 --reporter=text --reporter=json-summary npm test",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "lint": "eslint . --max-warnings 0",
