@@ -77,11 +77,11 @@ bound. Ordering is defined by [charwise].
 
 [charwise]: https://github.com/dominictarr/charwise
 
-If `process()` throws or rejects, no index entries are added to the index — any
-entries it emitted before throwing are discarded, and any entries left over from
-a previous run are dropped — that document is added to the index's "problem set"
-(queryable by `problems()`) and a `problem` event is emitted. It is retried the
-next time the file changes, on the next `reindex()`, or at the next startup.
+If `process()` throws or rejects, no index entries are added to the index, that
+document is added to the index's "problem set" (queryable by `problems()`) and a
+`problem` event is emitted. Any entries emitted before the throw are discarded,
+as are any left over from a previous run. The document is retried the next time
+the file changes, on the next `reindex()`, or at the next startup.
 
 ## API
 
@@ -106,9 +106,9 @@ may provide:
 - `shouldIndex(relPath, stats?)` - determines whether a document in the watched
   directory is indexed or not. Return `true` for documents that should be
   indexed and `false` for those that should be skipped. Consulted for every
-  document however it arrives — watcher event or `reindex()` — and on deletion
-  as well, so a skipped document is never touched in either direction. `stats`
-  is present when the file exists and absent when it has been deleted.
+  document, whether it arrives by a watcher event or by `reindex()`, and on
+  deletion as well, so a skipped document is never touched in either direction.
+  `stats` is present when the file exists and absent when it has been deleted.
 - `chokidar` - options passed verbatim to
   [`chokidar.watch`](https://github.com/paulmillr/chokidar#getting-started) for
   watcher tuning (see [Partially-written files](#partially-written-files)).
