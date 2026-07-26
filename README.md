@@ -126,7 +126,10 @@ construction, before anything touches disk.
 - `dataPath` — directory of documents to watch (default `'./db'`, created if
   missing).
 - `indexPath` — where the index databases live (default `'./index'`).
-- `shouldIndex(relPath, stats?)` — return false to skip a document.
+- `shouldIndex(relPath, stats?)` — return false to skip a document. Consulted
+  for every document, however it arrives — watcher event or `reindex()` — so a
+  filtered document can never reach the index. `stats` is present when the
+  file exists and absent when it has been deleted.
 - `chokidar` — options passed verbatim to
   [`chokidar.watch`](https://github.com/paulmillr/chokidar#api) for watcher
   tuning (see
@@ -149,10 +152,12 @@ construction, before anything touches disk.
 - `catalog.indexes.<name>.problems()` — async generator over this index's
   quarantined documents: `{ path, at, message, stack }`, as recorded when
   `process` threw.
-- `catalog.reindex(path)` — index (or, if deleted, de-index) a document right
-  now instead of waiting for the watcher; resolves when done. Takes a
-  `dataPath`-relative or absolute path. Use it when your own code writes a
-  document and wants read-your-writes.
+- `catalog.reindex(path)` — "this document changed; do the usual thing for it,
+  now." Handles the path exactly as a watcher event would — `shouldIndex`
+  included — instead of waiting for the watcher to notice. Takes a
+  `dataPath`-relative or absolute path. Resolves `true` if the document was
+  processed, or `false` if `shouldIndex` filtered it out. Use it when your own
+  code writes a document and wants read-your-writes.
 - `catalog.close()` — stop watching, drain pending work, close the databases.
 - Event `'idle'` — emitted whenever the catalog goes fully quiescent: the
   initial sweep has been enumerated _and_ every queued update has been

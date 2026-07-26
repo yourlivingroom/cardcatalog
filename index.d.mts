@@ -213,11 +213,15 @@ export interface Catalog<
     readonly indexPath: string;
 
     /**
-     * Index (or, if the file is gone, de-index) a document now rather than
-     * waiting for the watcher, resolving once done. Accepts a dataPath-
-     * relative or absolute path; rejects paths outside `dataPath`.
+     * "This document changed — do the usual thing for it, now." Handles the
+     * path exactly as a watcher event would, `shouldIndex` included, rather
+     * than waiting for the watcher to notice. Accepts a dataPath-relative or
+     * absolute path; rejects paths outside `dataPath`.
+     *
+     * @returns true if the document was processed (indexed, or de-indexed
+     * when the file is gone), false if `shouldIndex` filtered it out.
      */
-    reindex(path: string): Promise<void>;
+    reindex(path: string): Promise<boolean>;
 
     /** Stop watching, drain pending work, and close the databases. */
     close(): Promise<void>;

@@ -53,7 +53,7 @@ Each named index is its own `ClassicLevel` database under `opts.indexPath/<name>
 
 All deletions of old keys and insertions of new ones for a file happen in a single `batch()`, so an index update is atomic per file per index.
 
-`reindex(path)` lets a writer force immediate indexing instead of waiting for the watcher; it goes through the same queue, so it can't race watcher-driven updates. A missing file is treated as removal.
+`reindex(path)` means "this document changed — do the usual thing for it, now": identical handling to a watcher event, `shouldIndex` included, just without waiting for the watcher. It goes through the same queue, so it can't race watcher-driven updates. A missing file is treated as removal. Resolves `true` if the document was processed, `false` if `shouldIndex` filtered it out. Because reindex no longer bypasses the filter, tests that need the watcher silenced use `chokidar: { ignored: () => true }` (the `NO_WATCH` helper) rather than a false `shouldIndex`.
 
 Path identity: documents are keyed everywhere — index keys, fileMeta, `shouldIndex`, `process`'s context, query results — by their dataPath-relative path, computed lexically (`path.resolve`/`path.relative`, never `realpath`) and separator-normalized to `/` on every platform (`toRelPath` is the single boundary), so index databases are portable across operating systems. Physical canonicalization is deliberately avoided: it needs search permission on every ancestor directory and fails with ENOENT on deleted files, which is exactly the remove case. `reindex()` accepts relative (to dataPath) or absolute spellings, normalizes them to the same identity, and rejects paths outside dataPath.
 

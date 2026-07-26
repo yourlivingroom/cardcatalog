@@ -554,11 +554,13 @@ export default function cardcatalog(indexes, opts = {}) {
         dataPath: opts.dataPath,
         indexPath: opts.indexPath,
 
-        // Index `path` now and resolve once done — for a writer that wants the
-        // index to reflect its change synchronously instead of waiting for the
-        // watcher. Goes through the same queue as watcher-driven updates (so no
-        // race), and is idempotent with them. A missing file means "removed".
-        // Takes a dataPath-relative or absolute path.
+        // "This document changed — do the usual thing for it, now." Same
+        // handling as a watcher event, including shouldIndex: a filtered
+        // document is left alone and this resolves false. Goes through the
+        // same queue as watcher-driven updates (so no race) and is
+        // idempotent with them. A missing file means "removed". Takes a
+        // dataPath-relative or absolute path. Resolves true if the document
+        // was processed.
         async reindex(path) {
             const relPath = toRelPath(path);
             if (relPath.startsWith('..') || pathLib.isAbsolute(relPath)) {
@@ -572,11 +574,22 @@ export default function cardcatalog(indexes, opts = {}) {
                 );
             } catch (e) {
                 if (e.code === 'ENOENT') {
-                    return queueFileUpdate(relPath, true);
+                    // Gone: mirror the watcher's unlink path, which consults
+                    // shouldIndex without stats.
+                    if (!opts.shouldIndex(relPath)) {
+                        return false;
+                    }
+                    await queueFileUpdate(relPath, true);
+                    return true;
                 }
                 throw e;
             }
-            return queueFileUpdate(relPath, false, stats);
+
+            if (!opts.shouldIndex(relPath, stats)) {
+                return false;
+            }
+            await queueFileUpdate(relPath, false, stats);
+            return true;
         },
     });
 

@@ -180,7 +180,7 @@ async function surface() {
     type _IndexPath = Expect<Equal<typeof catalog.indexPath, string>>;
 
     const reindexed = await catalog.reindex('doc1');
-    type _Reindex = Expect<Equal<typeof reindexed, void>>;
+    type _Reindex = Expect<Equal<typeof reindexed, boolean>>;
 
     await catalog.close();
 

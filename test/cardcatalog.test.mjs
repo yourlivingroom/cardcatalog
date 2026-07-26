@@ -18,6 +18,11 @@ const wordIndex = {
     },
 };
 
+// Silences the watcher without touching shouldIndex, so explicit reindex()
+// calls are the only updates and can't be raced. (shouldIndex can't do this
+// job any more — reindex respects it.)
+const NO_WATCH = { chokidar: { ignored: () => true } };
+
 // Watcher events arrive on the fs's schedule, not ours, so assertions on
 // watcher-driven state have to poll.
 async function eventually(fn, timeoutMs = 5000) {
@@ -293,7 +298,7 @@ test('undefined is rejected anywhere in a key', async (t) => {
                 process: (content, emit) => emit(['a', undefined], 'x'),
             },
         },
-        { shouldIndex: () => false },
+        NO_WATCH,
     );
 
     // Emit-side: the offending document is quarantined with a clear message.
@@ -497,6 +502,59 @@ test('subdirectory documents key with forward slashes everywhere', async (t) => 
     assert.equal(await catalog.indexes.words.get('nested'), null);
 });
 
+test('reindex() honours shouldIndex and reports what it did', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        {
+            ...NO_WATCH,
+            shouldIndex: (path) => !path.endsWith('.skip'),
+        },
+    );
+
+    // Filtered: left alone entirely, and says so.
+    const skipped = writeDoc(catalog, 'doc1.skip', 'chi');
+    assert.equal(await catalog.reindex(skipped), false);
+    assert.equal(await catalog.indexes.words.get('chi'), null);
+
+    // Not filtered: processed, and says so.
+    const kept = writeDoc(catalog, 'doc2', 'psi');
+    assert.equal(await catalog.reindex(kept), true);
+    assert.ok(await catalog.indexes.words.get('psi'));
+
+    // Removal consults shouldIndex too, so a filtered path stays a no-op
+    // even when the file is gone.
+    fs.unlinkSync(skipped);
+    assert.equal(await catalog.reindex(skipped), false);
+
+    fs.unlinkSync(kept);
+    assert.equal(await catalog.reindex(kept), true);
+    assert.equal(await catalog.indexes.words.get('psi'), null);
+});
+
+test('reindex() passes stats to shouldIndex when the file exists', async (t) => {
+    const seen = [];
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        {
+            ...NO_WATCH,
+            shouldIndex: (path, stats) => {
+                seen.push(stats);
+                return true;
+            },
+        },
+    );
+
+    const path = writeDoc(catalog, 'doc1', 'omega');
+    await catalog.reindex(path);
+    assert.equal(typeof seen[0]?.mtimeMs, 'number');
+
+    fs.unlinkSync(path);
+    await catalog.reindex(path);
+    assert.equal(seen[1], undefined);
+});
+
 test('reindex() accepts dataPath-relative paths', async (t) => {
     const catalog = makeCatalog(t, { words: wordIndex });
 
@@ -520,11 +578,7 @@ test('reindex() rejects paths outside dataPath', async (t) => {
 });
 
 test('reindex() rethrows stat errors other than ENOENT', async (t) => {
-    const catalog = makeCatalog(
-        t,
-        { words: wordIndex },
-        { shouldIndex: () => false },
-    );
+    const catalog = makeCatalog(t, { words: wordIndex }, NO_WATCH);
 
     writeDoc(catalog, 'doc1', 'phi');
 
@@ -649,7 +703,7 @@ test('a quarantined document retries without an mtime bump', async (t) => {
         // Keep the watcher out so reindex() calls are the only updates and
         // the attempt counter stays deterministic; reindex() bypasses
         // shouldIndex.
-        { shouldIndex: () => false },
+        NO_WATCH,
     );
 
     const path = writeDoc(catalog, 'doc1', 'x');
@@ -677,7 +731,7 @@ test("'problem' and 'resolved' events track quarantine", async (t) => {
                 },
             },
         },
-        { shouldIndex: () => false },
+        NO_WATCH,
     );
 
     const problems = [];
@@ -711,7 +765,7 @@ test('removing a quarantined document also resolves it', async (t) => {
                 },
             },
         },
-        { shouldIndex: () => false },
+        NO_WATCH,
     );
 
     const resolveds = [];
@@ -768,11 +822,7 @@ test('awaitWriteFinish can be enabled through the chokidar opt', async (t) => {
 });
 
 test('EPERM during a Windows delete-pending resolves to removal', async (t) => {
-    const catalog = makeCatalog(
-        t,
-        { words: wordIndex },
-        { shouldIndex: () => false },
-    );
+    const catalog = makeCatalog(t, { words: wordIndex }, NO_WATCH);
 
     const path = writeDoc(catalog, 'doc1', 'win');
     await catalog.reindex(path);
@@ -798,11 +848,7 @@ test('EPERM during a Windows delete-pending resolves to removal', async (t) => {
 });
 
 test('persistent EPERM is a real error', async (t) => {
-    const catalog = makeCatalog(
-        t,
-        { words: wordIndex },
-        { shouldIndex: () => false },
-    );
+    const catalog = makeCatalog(t, { words: wordIndex }, NO_WATCH);
 
     const path = writeDoc(catalog, 'doc1', 'locked');
     const realStat = fs.promises.stat;
@@ -818,11 +864,7 @@ test('persistent EPERM is a real error', async (t) => {
 });
 
 test('a file vanishing before its read is not an error', async (t) => {
-    const catalog = makeCatalog(
-        t,
-        { words: wordIndex },
-        { shouldIndex: () => false },
-    );
+    const catalog = makeCatalog(t, { words: wordIndex }, NO_WATCH);
 
     const errors = [];
     catalog.on('error', (e) => errors.push(e));
@@ -864,11 +906,7 @@ test("watcher-driven failures emit 'error'", async (t) => {
 });
 
 test("reindex() failures reject the caller, not 'error'", async (t) => {
-    const catalog = makeCatalog(
-        t,
-        { words: wordIndex },
-        { shouldIndex: () => false },
-    );
+    const catalog = makeCatalog(t, { words: wordIndex }, NO_WATCH);
 
     const errors = [];
     catalog.on('error', (e) => errors.push(e));
@@ -892,11 +930,7 @@ test("reindex() failures reject the caller, not 'error'", async (t) => {
 // Guards index.d.mts against drifting from what the implementation actually
 // exposes; the type tests can only check the declarations' self-consistency.
 test('runtime surface matches the type declarations', async (t) => {
-    const catalog = makeCatalog(
-        t,
-        { words: wordIndex },
-        { shouldIndex: () => false },
-    );
+    const catalog = makeCatalog(t, { words: wordIndex }, NO_WATCH);
 
     // Ignoring EventEmitter's own _-prefixed instance fields.
     assert.deepEqual(
@@ -940,8 +974,8 @@ test('runtime surface matches the type declarations', async (t) => {
     assert.ok(Buffer.isBuffer(match.readSync()));
     assert.equal(typeof match.readSync('utf8'), 'string');
 
-    // reindex resolves to undefined, as Promise<void> claims.
-    assert.equal(await catalog.reindex('doc1'), undefined);
+    // reindex resolves to a boolean, as Promise<boolean> claims.
+    assert.equal(await catalog.reindex('doc1'), true);
 });
 
 test('problem records match the declared Problem shape', async (t) => {
@@ -954,7 +988,7 @@ test('problem records match the declared Problem shape', async (t) => {
                 },
             },
         },
-        { shouldIndex: () => false },
+        NO_WATCH,
     );
 
     await catalog.reindex(writeDoc(catalog, 'doc1', 'x'));
@@ -986,7 +1020,7 @@ test("'problem' and 'resolved' payloads match their declared shapes", async (t) 
                 },
             },
         },
-        { shouldIndex: () => false },
+        NO_WATCH,
     );
 
     const problems = [];
