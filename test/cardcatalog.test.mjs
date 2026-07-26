@@ -142,6 +142,88 @@ test('invalid configs throw at construction', async (t) => {
     assert.deepEqual(fs.readdirSync(root), []);
 });
 
+test('both directories are created eagerly at construction', async (t) => {
+    const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+    const dataPath = pathLib.join(root, 'db');
+    const indexPath = pathLib.join(root, 'deeply', 'nested', 'index');
+
+    const catalog = cardcatalog({ words: wordIndex }, { dataPath, indexPath });
+    t.after(async () => {
+        await catalog.close();
+        fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        });
+    });
+
+    // Before any query: classic-level opens lazily, so this only holds
+    // because the directory is created up front.
+    assert.ok(fs.existsSync(dataPath), 'dataPath');
+    assert.ok(fs.existsSync(indexPath), 'indexPath, including missing parents');
+});
+
+test('a catalog with no indexes still creates indexPath', async (t) => {
+    const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+    const indexPath = pathLib.join(root, 'index');
+
+    const catalog = cardcatalog(
+        {},
+        { dataPath: pathLib.join(root, 'db'), indexPath },
+    );
+    t.after(async () => {
+        await catalog.close();
+        fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        });
+    });
+
+    assert.ok(fs.existsSync(indexPath));
+});
+
+// Windows ignores mode bits here, and root bypasses them entirely.
+const permissionsApply =
+    process.platform !== 'win32' && (process.getuid?.() ?? 0) !== 0;
+
+test(
+    'an unwritable indexPath fails at construction, not mid-query',
+    {
+        skip: permissionsApply
+            ? false
+            : 'needs POSIX permissions and a non-root user',
+    },
+    async (t) => {
+        const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+        const locked = pathLib.join(root, 'locked');
+        fs.mkdirSync(locked, { mode: 0o500 });
+        t.after(() => {
+            fs.chmodSync(locked, 0o700);
+            fs.rmSync(root, {
+                recursive: true,
+                force: true,
+                maxRetries: 10,
+                retryDelay: 50,
+            });
+        });
+
+        assert.throws(
+            () =>
+                cardcatalog(
+                    { words: wordIndex },
+                    {
+                        dataPath: pathLib.join(root, 'db'),
+                        indexPath: pathLib.join(locked, 'index'),
+                    },
+                ),
+            (e) => e.code === 'EACCES' && e.path.includes('index'),
+        );
+    },
+);
+
 test('watcher indexes pre-existing files', async (t) => {
     const rootDir = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
     const dataPath = pathLib.join(rootDir, 'db');

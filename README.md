@@ -3,7 +3,7 @@
 [![CI](https://github.com/yourlivingroom/cardcatalog/actions/workflows/ci.yml/badge.svg)](https://github.com/yourlivingroom/cardcatalog/actions/workflows/ci.yml)
 [![Coverage](https://raw.githubusercontent.com/yourlivingroom/cardcatalog/badges/coverage.svg)](https://github.com/yourlivingroom/cardcatalog/actions/workflows/ci.yml)
 
-Persistent, incrementally-maintained LevelDB indexes over watched directory.
+Persistent, incrementally-maintained LevelDB indexes over a watched directory.
 
 Point `cardcatalog` at a directory and provide one or more indexing functions,
 and it will watch contained files for changes and update indexes as needed.
@@ -11,8 +11,7 @@ and it will watch contained files for changes and update indexes as needed.
 Under the hood: [chokidar] watches the directory and runs your `process`
 functions on each file as it appears or changes. Process functions emit index
 entries into a [LevelDB][classic-level] and existing index entries are replaced
-when a file updates. Indexes are thus similar to
-[CouchDB][couchdb].
+when a file updates. Indexes are thus similar to [CouchDB][couchdb].
 
 [chokidar]: https://github.com/paulmillr/chokidar
 [classic-level]: https://github.com/Level/classic-level
@@ -50,117 +49,84 @@ for await (const match of catalog.indexes.byAuthor.getMany('Le Guin')) {
 Drop a new file into `./books` and it's indexed automatically; delete one and
 its entries disappear.
 
-## TypeScript
+## Usage
 
-Types ship with the package — no `@types` install. Index names are tracked
-through the factory, so `catalog.indexes.byAuthor` is known and a typo is a
-compile error. Emitted value types flow through to matches when a config is
-annotated:
+When a file is created or modified, it is run through each index's
+`process(fileBuffer, emit, opts)` function. `emit(key, value)` may be called
+zero, one, or multiple times, and each call adds an index entry pointing back to
+the processed file. If the file is modified later, an atomic transaction drops
+any associated index entries and repopulates them via another call to
+`process()`. When a file is deleted, all associated index entries are dropped.
 
-```ts
-import type { IndexConfig } from '@livingroom/cardcatalog';
+Indexes are persisted to disk in LevelDB, and records are kept of the
+last-modified time of each file. On startup, `cardcatalog` scans each file in
+the directory, consults each index, and--if the file has been modified since the
+last run--`process()`es it anew. Files that have not changed since the last time
+they were `process()`ed are ignored at startup.
 
-const indexes: Record<'byAuthor', IndexConfig<{ title: string }>> = {
-    byAuthor: {
-        valueEncoding: 'json',
-        process: (content, emit) => emit('Le Guin', { title: 'Earthsea' }),
-    },
-};
+`emit()` keys must be (possibly nested) arrays of strings, numbers, booleans,
+and `null`s. Non-array keys will be coerced into singleton arrays (e.g.,
+`emit(5, <value>)` emits to the key `[5]`).
 
-const match = await cardcatalog(indexes).indexes.byAuthor.get('Le Guin');
-match?.indexValue.title; // string
-```
-
-Without an annotation, `indexValue` is `unknown` rather than `any`, so it has
-to be narrowed. `Key` excludes `undefined`, matching the runtime guard.
-
-## How it works
-
-For every file in `dataPath`, each index's `process(content, emit, { path })`
-is called with the file's content as a raw `Buffer`. Every `emit(key, value)`
-writes one card: the emitted key — anything [charwise] can encode: `null`,
-booleans, numbers, strings, and arbitrarily nested arrays of these
-(`undefined` is rejected; it's reserved as the internal range sentinel) — plus
-the
-document's path become a sorted LevelDB key, so looking up a key — or a key
-prefix, or a range — is a contiguous scan, in charwise's cross-type sort
-order.
+Indexes may later be queried with `getMany(keyPrefix)`, which will return all
+entries with keys of the form `[...keyPrefix, ...other]` (including exact
+matches) or `getRange()`, which can return all keys between a lower and upper
+bound. Ordering is defined by [charwise].
 
 [charwise]: https://github.com/dominictarr/charwise
 
-Documents are identified by their `dataPath`-relative path, always with
-forward slashes — on every platform, so an index directory built on one OS is
-readable on another. Nothing absolute is ever stored, so moving or renaming
-the enclosing directories is fine as long as `dataPath` and `indexPath` still
-point at the same content: the index is picked up as-is, with no
-re-processing. Updates are atomic
-per file per index: a document's old cards are removed in the same batch that
-writes its new ones. Unchanged files (by mtime) are skipped on restart, so
-re-opening a catalog over a large directory is cheap.
-
-If `process` throws, that document is quarantined — atomically: cards emitted
-before the throw are discarded, the document's old cards are removed, and the
-error is recorded, all in one batch. A quarantined document contributes
-nothing to the index until it's retried, which happens when the file changes,
-when `reindex()` is called, or on the next startup sweep; the record clears
-automatically on success. Quarantined documents are visible through
-`problems()` and the `'problem'`/`'resolved'` events. One bad document never
-poisons the rest of the catalog.
+If `process()` throws or rejects, no index entries are added to the index, that
+document is added to the index's "problem set" (queryable by `problems()`) and a
+`problem` event is emitted.
 
 ## API
 
-### `cardcatalog(indexes, opts?) → catalog`
+### `cardcatalog(indexes, opts?) => catalog`
 
-`indexes` is a map of index name → config:
+`indexes` is a `{ [indexName]: <indexOptions> }` map, where each `indexOptions`
+may provide:
 
-- `process(content, emit, { path })` — required, may be async. `content` is a
-  `Buffer` (see [Decoding is your job](#decoding-is-your-job)); call
+- `process(content, emit, { path })` - **required**, may be async. `content` is
+  a `Buffer` (see [Decoding is your job](#decoding-is-your-job)); call
   `emit(key, value)` any number of times. `path` is the document's
   `dataPath`-relative path.
-- `valueEncoding` — Level encoding for emitted values (default `'utf8'`;
+- `valueEncoding` - Level encoding for emitted values (default `'utf8'`;
   `'json'` is handy).
 
-Invalid configuration — a missing `process`, an index name that isn't a
-plain directory name, malformed `opts` — throws a `TypeError` at
-construction, before anything touches disk.
-
-`opts`:
+`opts` provides further `cardcatalog` options:
 
 - `dataPath` — directory of documents to watch (default `'./db'`, created if
   missing).
-- `indexPath` — where the index databases live (default `'./index'`).
-- `shouldIndex(relPath, stats?)` — return false to skip a document. Consulted
-  for every document, however it arrives — watcher event or `reindex()` — so a
-  filtered document can never reach the index. `stats` is present when the
-  file exists and absent when it has been deleted.
+- `indexPath` — where the index databases live (default `'./index'`, created if
+  missing).
+- `shouldIndex(relPath, stats?)` - determines whether a file found in the
+  watched directory is `process()`ed or not. Return `true` for documents that
+  should be indexed and `false` for those that should be skipped. Called in all
+  situations before a document would be passed to `process()`.
 - `chokidar` — options passed verbatim to
   [`chokidar.watch`](https://github.com/paulmillr/chokidar#api) for watcher
   tuning (see
   [Partially-written files](#partially-written-files)).
 
-### The catalog
+### `catalog`
 
-- `catalog.indexes.<name>.get(key)` — the single match for `key`, or `null`.
-  Throws if there are several (the error names the key, index, and colliding
-  paths) — calling `get` asserts the key is unique.
-- `catalog.indexes.<name>.getMany(key)` — async generator over every match
-  for `key`, including compound keys it prefixes: with `emit(['tag', t], …)`,
-  `getMany(['tag'])` yields every tag entry.
-- `catalog.indexes.<name>.getRange({ gt, gte, lt, lte, reverse, limit })` —
+- `catalog.indexes.<name>.get(key)` - the single match for `key`, or `null` if
+  no such index entry exists. Throws if there is more than one such entry.
+- `catalog.indexes.<name>.getMany(key)` - async generator over every match
+  for `key`, including compound keys it prefixes.
+- `catalog.indexes.<name>.getRange({ gt, gte, lt, lte, reverse, limit })` -
   async generator over a key range. Bounds have the same subtree semantics as
   `getMany`: `gte`/`lte` include the bounding key's whole subtree, `gt`/`lt`
-  skip past it. Omitted bounds are open ends; `getRange({})` scans the whole
-  index. `reverse` walks high-to-low; `limit` caps yielded entries and applies
-  after reversal, so `{ reverse: true, limit: n }` is "last n".
-- `catalog.indexes.<name>.problems()` — async generator over this index's
+  skip past it. Omitted bounds are open ends; `reverse` walks high-to-low;
+  `limit` caps yielded entries (applied after reversal).
+- `catalog.indexes.<name>.problems()` - async generator over this index's
   quarantined documents: `{ path, at, message, stack }`, as recorded when
   `process` threw.
-- `catalog.reindex(path)` — "this document changed; do the usual thing for it,
-  now." Handles the path exactly as a watcher event would — `shouldIndex`
-  included — instead of waiting for the watcher to notice. Takes a
-  `dataPath`-relative or absolute path. Resolves `true` if the document was
-  processed, or `false` if `shouldIndex` filtered it out. Use it when your own
-  code writes a document and wants read-your-writes.
+- `catalog.reindex(path)` - forces reindexing of the document at the specified
+  path immediately. Returns a promise that resolves when the index is up to date
+  for the specified document. Useful for read-your-writes situations. Resolves
+  to `true` if `process()` ran, or `false` if `shouldIndex()` filtered out the
+  document. Path should be `dataPath`-relative or absolute.
 - `catalog.close()` — stop watching, drain pending work, close the databases.
 - Event `'idle'` — emitted whenever the catalog goes fully quiescent: the
   initial sweep has been enumerated _and_ every queued update has been
@@ -190,6 +156,30 @@ Matches yielded by `get`/`getMany`/`getRange` look like:
     readSync,   // (...args) => fs.readFileSync(<document>, ...args)
 }
 ```
+
+## TypeScript
+
+Types ship with the package — no `@types` install. Index names are tracked
+through the factory, so `catalog.indexes.byAuthor` is known and a typo is a
+compile error. Emitted value types flow through to matches when a config is
+annotated:
+
+```ts
+import type { IndexConfig } from '@livingroom/cardcatalog';
+
+const indexes: Record<'byAuthor', IndexConfig<{ title: string }>> = {
+    byAuthor: {
+        valueEncoding: 'json',
+        process: (content, emit) => emit('Le Guin', { title: 'Earthsea' }),
+    },
+};
+
+const match = await cardcatalog(indexes).indexes.byAuthor.get('Le Guin');
+match?.indexValue.title; // string
+```
+
+Without an annotation, `indexValue` is `unknown` rather than `any`, so it has
+to be narrowed. `Key` excludes `undefined`, matching the runtime guard.
 
 ## Partially-written files
 

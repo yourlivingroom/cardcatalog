@@ -155,6 +155,12 @@ export default function cardcatalog(indexes, opts = {}) {
         return pathLib.join(opts.dataPath, relPath);
     }
 
+    // Eagerly, before any database is constructed: classic-level would create
+    // this lazily on first use, but then an unwritable location surfaces as
+    // an opaque "Iterator is not open" on the first query instead of a
+    // clearly attributable EACCES right here.
+    fs.mkdirSync(opts.indexPath, { recursive: true });
+
     const indexDbs = Object.fromEntries(
         Object.entries(indexes).map(([k]) => [
             k,
