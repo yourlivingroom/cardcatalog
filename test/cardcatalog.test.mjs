@@ -459,15 +459,27 @@ test('reindex() rejects paths outside dataPath', async (t) => {
 });
 
 test('reindex() rethrows stat errors other than ENOENT', async (t) => {
-    const catalog = makeCatalog(t, { words: wordIndex });
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { shouldIndex: () => false },
+    );
 
     writeDoc(catalog, 'doc1', 'phi');
 
-    // doc1 is a file, so statting a path under it is ENOTDIR — a real error,
-    // not "the document was removed".
-    await assert.rejects(() => catalog.reindex('doc1/child'), {
-        code: 'ENOTDIR',
+    // Monkeypatched rather than provoked via the fs: the natural trigger
+    // (statting a path under a file) yields ENOTDIR on POSIX but ENOENT on
+    // Windows.
+    const realStat = fs.promises.stat;
+    fs.promises.stat = async () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    };
+    t.after(() => {
+        fs.promises.stat = realStat;
     });
+
+    await assert.rejects(() => catalog.reindex('doc1'), { code: 'EACCES' });
+    fs.promises.stat = realStat;
 });
 
 test('absolute and relative spellings are one identity', async (t) => {

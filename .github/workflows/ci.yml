@@ -9,6 +9,7 @@ jobs:
     test:
         runs-on: ${{ matrix.os }}
         strategy:
+            fail-fast: false
             matrix:
                 os: [ubuntu-latest, windows-latest, macos-latest]
                 node: [20, 22, 24]
@@ -22,6 +23,12 @@ jobs:
             - run: npm run lint
             - run: npm run format:check
             - run: npm run coverage
+            # The pretty reporter's failure details can be lost to pipe
+            # buffering; on failure, re-run with the spec reporter to see
+            # which tests failed.
+            - name: Detail test failures
+              if: failure()
+              run: node --test --test-reporter=spec
 
     badge:
         needs: test
