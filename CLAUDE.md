@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Format: `npm run format` (prettier; check-only via `npm run format:check`)
 - Lint: `npm run lint` (eslint, zero warnings tolerated; `npx eslint . --fix` autofixes import order)
 
-Import style is enforced, not conventional: whole-module (default) imports first, then destructuring (named) ones, each block alphabetized by module name with a blank line between, and no imports below the first statement (`perfectionist/sort-imports` + `import-x/first`). Sorting is by module name, not local binding, so e.g. `p-queue` precedes `path`.
+Import style is enforced, not conventional: whole-module (default) imports first, then destructuring (named) ones, each block alphabetized by module name with a blank line between (`perfectionist/sort-imports`), and no imports below the first statement (`local/imports-first`, a ~15-line rule defined inline in `eslint.config.mjs`). Sorting is by module name, not local binding, so e.g. `p-queue` precedes `path`. The imports-first rule is local rather than `eslint-plugin-import-x` on purpose: import-x drags in a native resolver whose per-platform optional dependencies npm records differently depending on where `npm install` ran, which broke `npm ci` on every CI job.
 
 ## Testing approach
 
