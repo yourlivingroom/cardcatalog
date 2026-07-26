@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`@livingroom/cardcatalog` is a file-watching directory indexer library. The entire implementation is `index.mjs` (a single default-exported factory function). `scratch/` is a gitignored directory for hacky dev scripts and their runtime data; `scratch/hack.mjs` is a demo script showing usage, with its `db/` and `index/` data living alongside it in `scratch/`.
+`@yourlivingroom/cardcatalog` is a file-watching directory indexer library. The entire implementation is `index.mjs` (a single default-exported factory function). `scratch/` is a gitignored directory for hacky dev scripts and their runtime data; `scratch/hack.mjs` is a demo script showing usage, with its `db/` and `index/` data living alongside it in `scratch/`.
 
 ## Commands
 

@@ -1,5 +1,5 @@
 {
-    "name": "@livingroom/cardcatalog",
+    "name": "@yourlivingroom/cardcatalog",
     "version": "0.0.1",
     "description": "Persistent, incrementally-maintained LevelDB indexes over a watched directory",
     "keywords": [

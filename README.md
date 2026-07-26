@@ -20,7 +20,7 @@ when a file updates. Indexes are thus similar to [CouchDB][couchdb].
 ## Quick start
 
 ```js
-import cardcatalog from '@livingroom/cardcatalog';
+import cardcatalog from '@yourlivingroom/cardcatalog';
 import { once } from 'events';
 
 const catalog = cardcatalog(
@@ -173,8 +173,8 @@ compile error. Emitted value types flow through to matches when a config is
 annotated:
 
 ```ts
-import cardcatalog from '@livingroom/cardcatalog';
-import type { IndexConfig } from '@livingroom/cardcatalog';
+import cardcatalog from '@yourlivingroom/cardcatalog';
+import type { IndexConfig } from '@yourlivingroom/cardcatalog';
 
 const indexes: Record<'byAuthor', IndexConfig<{ title: string }>> = {
     byAuthor: {
