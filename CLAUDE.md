@@ -23,6 +23,8 @@ Tests run against real temp directories (`fs.mkdtemp`) rather than a mock fs —
 
 `cardcatalog(indexes, opts)` takes a map of named index configs and returns an EventEmitter with `{ indexes, close, reindex, dataPath, indexPath }`. `catalogs` is a deprecated alias for `indexes` (non-enumerable getter, warns once per process) kept for backward compatibility — do not use it in new code or docs.
 
+Config is validated fail-fast at the top of the factory, before any directory or database is created. Index names become directory names under indexPath, so separators, `.`/`..`, and empty names are rejected.
+
 Error discipline: every failure has exactly one owner. Document-level `process()` throws → quarantine + `'problem'` event (never `'error'`). `reindex()` failures → reject the caller's promise (never also emitted). Watcher-driven infrastructure failures and chokidar `'error'`s → the catalog's `'error'` event, with standard unhandled-throws semantics. A file vanishing between event and read (ENOENT) is silently skipped — the unlink event handles cleanup. p-queue re-emits task rejections as its own `'error'` events, but it uses eventemitter3 (inert when unlistened), so no queue-level listener exists or is needed.
 
 The catalog emits `'idle'` whenever it goes fully quiescent: the initial sweep has finished enumerating AND the work queue has drained. The queue draining mid-sweep deliberately doesn't count (chokidar is still finding files), so the first `'idle'` doubles as a ready signal — `await once(catalog, 'idle')` guarantees every pre-existing document is queryable. It fires again after each later batch of changes is folded in.

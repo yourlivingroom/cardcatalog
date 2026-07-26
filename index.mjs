@@ -38,7 +38,53 @@ function shallowMerge(o1, o2) {
     return result;
 }
 
+function validateIndexes(indexes) {
+    if (typeof indexes !== 'object' || indexes === null) {
+        throw new TypeError(
+            'indexes must be an object mapping index names to configs',
+        );
+    }
+
+    for (const [name, config] of Object.entries(indexes)) {
+        if (
+            name === '' ||
+            name === '.' ||
+            name === '..' ||
+            /[/\\]/.test(name)
+        ) {
+            throw new TypeError(
+                'invalid index name ' +
+                    JSON.stringify(name) +
+                    ': index names become directory names under indexPath',
+            );
+        }
+
+        if (typeof config?.process !== 'function') {
+            throw new TypeError(
+                'index ' + JSON.stringify(name) + ' needs a process function',
+            );
+        }
+    }
+}
+
+function validateOpts(opts) {
+    if (typeof opts.dataPath !== 'string') {
+        throw new TypeError('opts.dataPath must be a string');
+    }
+    if (typeof opts.indexPath !== 'string') {
+        throw new TypeError('opts.indexPath must be a string');
+    }
+    if (typeof opts.shouldIndex !== 'function') {
+        throw new TypeError('opts.shouldIndex must be a function');
+    }
+    if (typeof opts.chokidar !== 'object' || opts.chokidar === null) {
+        throw new TypeError('opts.chokidar must be an object');
+    }
+}
+
 export default function cardcatalog(indexes, opts = {}) {
+    validateIndexes(indexes);
+
     opts = shallowMerge(
         {
             dataPath: './db',
@@ -48,6 +94,7 @@ export default function cardcatalog(indexes, opts = {}) {
         },
         opts,
     );
+    validateOpts(opts);
 
     // Documents are identified everywhere — index keys, fileMeta, the public
     // API — by their dataPath-relative path, computed lexically. Physical

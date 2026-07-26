@@ -64,6 +64,67 @@ async function collect(iter) {
     return result;
 }
 
+test('invalid configs throw at construction', async (t) => {
+    assert.throws(() => cardcatalog(null), {
+        name: 'TypeError',
+        message: /indexes must be an object/,
+    });
+    assert.throws(() => cardcatalog('words'), {
+        name: 'TypeError',
+        message: /indexes must be an object/,
+    });
+
+    assert.throws(() => cardcatalog({ words: {} }), {
+        name: 'TypeError',
+        message: /index "words" needs a process function/,
+    });
+    assert.throws(() => cardcatalog({ words: { process: 5 } }), {
+        name: 'TypeError',
+        message: /index "words" needs a process function/,
+    });
+    assert.throws(() => cardcatalog({ words: null }), {
+        name: 'TypeError',
+        message: /index "words" needs a process function/,
+    });
+
+    // Index names become directory names under indexPath.
+    for (const name of ['', '.', '..', '../evil', 'a/b', 'a\\b']) {
+        assert.throws(
+            () => cardcatalog({ [name]: { process: () => {} } }),
+            { name: 'TypeError', message: /invalid index name/ },
+            JSON.stringify(name),
+        );
+    }
+
+    const words = { words: wordIndex };
+    assert.throws(() => cardcatalog(words, { dataPath: 5 }), {
+        message: /dataPath must be a string/,
+    });
+    assert.throws(() => cardcatalog(words, { indexPath: 5 }), {
+        message: /indexPath must be a string/,
+    });
+    assert.throws(() => cardcatalog(words, { shouldIndex: null }), {
+        message: /shouldIndex must be a function/,
+    });
+    assert.throws(() => cardcatalog(words, { chokidar: 'quiet' }), {
+        message: /chokidar must be an object/,
+    });
+
+    // Validation is side-effect-free: nothing was created on disk.
+    const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    assert.throws(() =>
+        cardcatalog(
+            { words: {} },
+            {
+                dataPath: pathLib.join(root, 'db'),
+                indexPath: pathLib.join(root, 'index'),
+            },
+        ),
+    );
+    assert.deepEqual(fs.readdirSync(root), []);
+});
+
 test('watcher indexes pre-existing files', async (t) => {
     const rootDir = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
     const dataPath = pathLib.join(rootDir, 'db');

@@ -85,6 +85,10 @@ poisons the rest of the catalog.
 - `valueEncoding` — Level encoding for emitted values (default `'utf8'`;
   `'json'` is handy).
 
+Invalid configuration — a missing `process`, an index name that isn't a
+plain directory name, malformed `opts` — throws a `TypeError` at
+construction, before anything touches disk.
+
 `opts`:
 
 - `dataPath` — directory of documents to watch (default `'./db'`, created if
