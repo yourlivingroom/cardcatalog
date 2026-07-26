@@ -417,6 +417,25 @@ test('idle fires again after later changes are folded in', async (t) => {
     assert.ok(await catalog.indexes.words.get('pi'));
 });
 
+test('subdirectory documents key with forward slashes everywhere', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    fs.mkdirSync(pathLib.join(catalog.dataPath, 'sub'), { recursive: true });
+    const abs = pathLib.join(catalog.dataPath, 'sub', 'doc1');
+    fs.writeFileSync(abs, 'nested');
+    await catalog.reindex(abs);
+
+    const match = await catalog.indexes.words.get('nested');
+    assert.equal(match.path, 'sub/doc1');
+    assert.equal((await match.read('utf8')).toString(), 'nested');
+
+    // The forward-slash relative spelling reaches the same identity on
+    // every platform.
+    fs.unlinkSync(abs);
+    await catalog.reindex('sub/doc1');
+    assert.equal(await catalog.indexes.words.get('nested'), null);
+});
+
 test('reindex() accepts dataPath-relative paths', async (t) => {
     const catalog = makeCatalog(t, { words: wordIndex });
 

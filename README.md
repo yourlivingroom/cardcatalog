@@ -58,7 +58,9 @@ writes one card: the emitted key (a string, number, or array of them) plus the
 document's path become a sorted LevelDB key, so looking up a key — or a key
 prefix, or a range — is a contiguous scan.
 
-Documents are identified by their `dataPath`-relative path. Updates are atomic
+Documents are identified by their `dataPath`-relative path, always with
+forward slashes — on every platform, so an index directory built on one OS is
+readable on another. Updates are atomic
 per file per index: a document's old cards are removed in the same batch that
 writes its new ones. Unchanged files (by mtime) are skipped on restart, so
 re-opening a catalog over a large directory is cheap.

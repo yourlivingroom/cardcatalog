@@ -104,12 +104,14 @@ export default function cardcatalog(indexes, opts = {}) {
     opts.dataPath = pathLib.resolve(opts.dataPath);
 
     // Relative inputs are taken as dataPath-relative already; absolute ones
-    // are made relative. Both lexically.
+    // are made relative. Both lexically. Separators are normalized to '/' on
+    // every platform so index keys — and therefore whole index databases —
+    // are portable between operating systems.
     function toRelPath(path) {
-        return pathLib.relative(
-            opts.dataPath,
-            pathLib.resolve(opts.dataPath, path),
-        );
+        return pathLib
+            .relative(opts.dataPath, pathLib.resolve(opts.dataPath, path))
+            .split(pathLib.sep)
+            .join('/');
     }
 
     function toAbsPath(relPath) {

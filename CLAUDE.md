@@ -42,7 +42,7 @@ All deletions of old keys and insertions of new ones for a file happen in a sing
 
 `reindex(path)` lets a writer force immediate indexing instead of waiting for the watcher; it goes through the same queue, so it can't race watcher-driven updates. A missing file is treated as removal.
 
-Path identity: documents are keyed everywhere — index keys, fileMeta, `shouldIndex`, `process`'s context, query results — by their dataPath-relative path, computed lexically (`path.resolve`/`path.relative`, never `realpath`). Physical canonicalization is deliberately avoided: it needs search permission on every ancestor directory and fails with ENOENT on deleted files, which is exactly the remove case. `reindex()` accepts relative (to dataPath) or absolute spellings, normalizes them to the same identity, and rejects paths outside dataPath.
+Path identity: documents are keyed everywhere — index keys, fileMeta, `shouldIndex`, `process`'s context, query results — by their dataPath-relative path, computed lexically (`path.resolve`/`path.relative`, never `realpath`) and separator-normalized to `/` on every platform (`toRelPath` is the single boundary), so index databases are portable across operating systems. Physical canonicalization is deliberately avoided: it needs search permission on every ancestor directory and fails with ENOENT on deleted files, which is exactly the remove case. `reindex()` accepts relative (to dataPath) or absolute spellings, normalizes them to the same identity, and rejects paths outside dataPath.
 
 Gotchas encoded in the source:
 
