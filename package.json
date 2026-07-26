@@ -19,7 +19,7 @@
         "url": "git+https://github.com/yourlivingroom/cardcatalog.git"
     },
     "license": "ISC",
-    "author": "Hampton Smith <hampton.w.smith@gmail.com>",
+    "author": "Hampton Smith <1743291+hamptonsmith@users.noreply.github.com>",
     "type": "module",
     "exports": "./index.mjs",
     "main": "index.mjs",
