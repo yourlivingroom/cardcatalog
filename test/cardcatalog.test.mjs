@@ -557,14 +557,22 @@ test('reindex() passes stats to shouldIndex when the file exists', async (t) => 
 
 test('an index survives moving the whole app directory', async (t) => {
     const base = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
-    t.after(() =>
+
+    // One hook, closing before removing: after hooks run in registration
+    // order, and deleting a directory whose LevelDB is still open is EBUSY
+    // on Windows.
+    let second;
+    t.after(async () => {
+        if (second) {
+            await second.close();
+        }
         fs.rmSync(base, {
             recursive: true,
             force: true,
             maxRetries: 10,
             retryDelay: 50,
-        }),
-    );
+        });
+    });
 
     const before = pathLib.join(base, 'app-before');
     const after = pathLib.join(base, 'app-after');
@@ -597,8 +605,7 @@ test('an index survives moving the whole app directory', async (t) => {
     // Pick up the whole app — db/ and index/ keep their relative positions.
     fs.renameSync(before, after);
 
-    const second = cardcatalog(indexes(), at(after));
-    t.after(() => second.close());
+    second = cardcatalog(indexes(), at(after));
     await once(second, 'idle');
 
     assert.equal((await second.indexes.words.get('alpha')).path, 'doc1');
