@@ -285,6 +285,45 @@ test('compound keys support prefix queries', async (t) => {
     assert.deepEqual(prefixed.map((m) => m.indexValue).sort(), ['blue', 'red']);
 });
 
+test('undefined is rejected anywhere in a key', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        {
+            words: {
+                process: (content, emit) => emit(['a', undefined], 'x'),
+            },
+        },
+        { shouldIndex: () => false },
+    );
+
+    // Emit-side: the offending document is quarantined with a clear message.
+    const path = writeDoc(catalog, 'doc1', 'x');
+    await catalog.reindex(path);
+    const problems = await collect(catalog.indexes.words.problems());
+    assert.equal(problems.length, 1);
+    assert.match(problems[0].message, /reserved as the range-scan sentinel/);
+
+    // Query-side: scalar, nested, and range-bound spellings all throw.
+    await assert.rejects(
+        collect(catalog.indexes.words.getMany(undefined)),
+        /query key must not contain undefined/,
+    );
+    await assert.rejects(
+        collect(catalog.indexes.words.getMany(['a', undefined])),
+        /query key must not contain undefined/,
+    );
+    await assert.rejects(
+        collect(catalog.indexes.words.getRange({ gte: ['a', undefined] })),
+        /range bound must not contain undefined/,
+    );
+
+    // But a top-level undefined bound still just means "omitted".
+    assert.deepEqual(
+        await collect(catalog.indexes.words.getRange({ gte: undefined })),
+        [],
+    );
+});
+
 test('getRange() scans between bounds', async (t) => {
     const catalog = makeCatalog(t, { words: wordIndex });
 

@@ -55,7 +55,9 @@ its entries disappear.
 For every file in `dataPath`, each index's `process(content, emit, { path })`
 is called with the file's content as a raw `Buffer`. Every `emit(key, value)`
 writes one card: the emitted key — anything [charwise] can encode: `null`,
-booleans, numbers, strings, and arbitrarily nested arrays of these — plus the
+booleans, numbers, strings, and arbitrarily nested arrays of these
+(`undefined` is rejected; it's reserved as the internal range sentinel) — plus
+the
 document's path become a sorted LevelDB key, so looking up a key — or a key
 prefix, or a range — is a contiguous scan, in charwise's cross-type sort
 order.

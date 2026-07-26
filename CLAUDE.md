@@ -46,7 +46,7 @@ Path identity: documents are keyed everywhere — index keys, fileMeta, `shouldI
 
 Gotchas encoded in the source:
 
-- `KEY_BOTTOM`/`KEY_TOP` are locally defined as `null`/`undefined` because the npm release of charwise doesn't export its LO/HI sentinels.
+- `KEY_BOTTOM`/`KEY_TOP` are locally defined as `null`/`undefined` because the npm release of charwise doesn't export its LO/HI sentinels. `undefined` is consequently rejected anywhere in emitted keys, query keys, and range bounds (`assertNoUndefined`) — it sorts at the edge of every subtree range and would silently escape prefix queries. `null` is fine: it's the LOW sentinel, and keys containing it still fall inside range bounds.
 - `opts.dataPath` is `mkdirSync`'d before watching because chokidar won't reliably see files created in a directory that didn't exist when the watch began.
 - On win32 the watch root is `realpathSync.native`'d once after creation — libuv's fs-event watcher asserts (native crash) when the watched root uses an 8.3 short name (like GH runners' `RUNNER~1` temp dir). Root-only exception to the no-realpath rule; per-document paths stay lexical. The block is c8-ignored since it's unreachable off-Windows.
 - `opts.chokidar` is passed verbatim to `chokidar.watch`. `awaitWriteFinish` is deliberately NOT defaulted on: it holds initial-scan add events past chokidar's `'ready'`, which would make the first `'idle'` fire before pre-existing documents are indexed.

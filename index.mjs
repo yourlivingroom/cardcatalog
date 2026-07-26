@@ -56,6 +56,26 @@ function shallowMerge(o1, o2) {
     return result;
 }
 
+// undefined is charwise's highest-sorting value, which is exactly why it's
+// our KEY_TOP range sentinel — a key containing it would sort at the edge of
+// every subtree range and silently escape prefix queries. Reject it anywhere
+// in a key rather than let that happen.
+function assertNoUndefined(key, what) {
+    if (key === undefined) {
+        throw new TypeError(
+            what +
+                ' must not contain undefined — it is reserved as the ' +
+                'range-scan sentinel',
+        );
+    }
+
+    if (Array.isArray(key)) {
+        for (const element of key) {
+            assertNoUndefined(element, what);
+        }
+    }
+}
+
 function validateIndexes(indexes) {
     if (typeof indexes !== 'object' || indexes === null) {
         throw new TypeError(
@@ -187,7 +207,10 @@ export default function cardcatalog(indexes, opts = {}) {
                 try {
                     await indexes[k].process(
                         fileContent,
-                        (k, v) => emitted.push([buildKey(relPath, k), v]),
+                        (k, v) => {
+                            assertNoUndefined(k, 'emitted key');
+                            emitted.push([buildKey(relPath, k), v]);
+                        },
                         { path: relPath },
                     );
                 } catch (e) {
@@ -453,6 +476,7 @@ export default function cardcatalog(indexes, opts = {}) {
                     return result;
                 },
                 async *getMany(queryKey) {
+                    assertNoUndefined(queryKey, 'query key');
                     queryKey = normalizeKey(queryKey);
                     yield* scanIndex(levelDb, indexName, {
                         gte: [...queryKey, KEY_BOTTOM],
@@ -470,6 +494,15 @@ export default function cardcatalog(indexes, opts = {}) {
                 // per distinct key), and applies after reversal.
                 async *getRange(range = {}) {
                     const iterOpts = {};
+
+                    // A top-level undefined bound just means "omitted";
+                    // undefined nested inside an array bound is the
+                    // sentinel hazard.
+                    for (const bound of ['gt', 'gte', 'lt', 'lte']) {
+                        if (range[bound] !== undefined) {
+                            assertNoUndefined(range[bound], 'range bound');
+                        }
+                    }
 
                     if (range.gte !== undefined) {
                         iterOpts.gte = [...normalizeKey(range.gte), KEY_BOTTOM];
