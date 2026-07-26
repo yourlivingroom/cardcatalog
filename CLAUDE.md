@@ -31,8 +31,8 @@ Each named index is its own `ClassicLevel` database under `opts.indexPath/<name>
 
 - `index` — emitted key → emitted value (valueEncoding from the index config, default utf8)
 - `reverseIndex` — emitted key → file path (used to clean up a file's old entries on reindex)
-- `fileMeta` — file path → `{ indexKeys, updatedAt }`; `updatedAt` (from mtime) lets unchanged files be skipped
-- `problemDocuments` — file path → error details when `process()` throws; cleared on successful reindex
+- `fileMeta` — file path → `{ indexKeys, updatedAt, failed? }`; `updatedAt` (from mtime) lets unchanged files be skipped, but `failed` defeats that skip so quarantined documents stay retryable via `reindex()` or the next startup sweep
+- `problemDocuments` — file path → `{ at, message, stack }` when `process()` throws; written in the same batch that clears the document's cards (quarantine is atomic — partial emissions are discarded), cleared on success, exposed via `catalogs.<name>.problems()`. The catalog emits `'problem'` ({ index, path, error }, each failure) and `'resolved'` ({ index, path }, on successful reindex or removal of a quarantined document)
 
 All deletions of old keys and insertions of new ones for a file happen in a single `batch()`, so an index update is atomic per file per index.
 

@@ -439,6 +439,142 @@ test('rapid updates to the same file do not interleave', async (t) => {
     assert.ok(await catalog.catalogs.words.get('two'));
 });
 
+test('a quarantined document is recorded and reported', async (t) => {
+    const catalog = makeCatalog(t, {
+        words: {
+            ...wordIndex,
+            process: (content, emit) => {
+                if (content.toString('utf8').includes('boom')) {
+                    throw new Error('kaboom');
+                }
+                wordIndex.process(content, emit);
+            },
+        },
+    });
+
+    await catalog.reindex(writeDoc(catalog, 'bad', 'boom'));
+
+    const problems = await collect(catalog.catalogs.words.problems());
+    assert.equal(problems.length, 1);
+    assert.equal(problems[0].path, 'bad');
+    assert.equal(problems[0].message, 'kaboom');
+    assert.ok(problems[0].stack);
+    assert.ok(problems[0].at);
+});
+
+test('quarantine discards cards emitted before the throw', async (t) => {
+    const catalog = makeCatalog(t, {
+        words: {
+            valueEncoding: 'json',
+            process: (content, emit) => {
+                emit('early', true);
+                throw new Error('late kaboom');
+            },
+        },
+    });
+
+    await catalog.reindex(writeDoc(catalog, 'doc1', 'x'));
+
+    assert.equal(await catalog.catalogs.words.get('early'), null);
+});
+
+test('a quarantined document retries without an mtime bump', async (t) => {
+    let attempts = 0;
+    const catalog = makeCatalog(
+        t,
+        {
+            words: {
+                valueEncoding: 'json',
+                process: (content, emit) => {
+                    if (++attempts === 1) {
+                        throw new Error('transient');
+                    }
+                    emit('recovered', true);
+                },
+            },
+        },
+        // Keep the watcher out so reindex() calls are the only updates and
+        // the attempt counter stays deterministic; reindex() bypasses
+        // shouldIndex.
+        { shouldIndex: () => false },
+    );
+
+    const path = writeDoc(catalog, 'doc1', 'x');
+    await catalog.reindex(path);
+    assert.equal(await catalog.catalogs.words.get('recovered'), null);
+
+    // Same file, same mtime: the failed flag must defeat the skip-guard.
+    await catalog.reindex(path);
+    assert.ok(await catalog.catalogs.words.get('recovered'));
+    assert.deepEqual(await collect(catalog.catalogs.words.problems()), []);
+});
+
+test("'problem' and 'resolved' events track quarantine", async (t) => {
+    let fail = true;
+    const catalog = makeCatalog(
+        t,
+        {
+            words: {
+                valueEncoding: 'json',
+                process: (content, emit) => {
+                    if (fail) {
+                        throw new Error('nope');
+                    }
+                    emit('fine', true);
+                },
+            },
+        },
+        { shouldIndex: () => false },
+    );
+
+    const problems = [];
+    const resolveds = [];
+    catalog.on('problem', (p) => problems.push(p));
+    catalog.on('resolved', (r) => resolveds.push(r));
+
+    const path = writeDoc(catalog, 'doc1', 'x');
+    await catalog.reindex(path);
+
+    assert.equal(problems.length, 1);
+    assert.equal(problems[0].index, 'words');
+    assert.equal(problems[0].path, 'doc1');
+    assert.equal(problems[0].error.message, 'nope');
+    assert.equal(resolveds.length, 0);
+
+    fail = false;
+    await catalog.reindex(path);
+
+    assert.deepEqual(resolveds, [{ index: 'words', path: 'doc1' }]);
+    assert.equal(problems.length, 1);
+});
+
+test('removing a quarantined document also resolves it', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        {
+            words: {
+                process: () => {
+                    throw new Error('always');
+                },
+            },
+        },
+        { shouldIndex: () => false },
+    );
+
+    const resolveds = [];
+    catalog.on('resolved', (r) => resolveds.push(r));
+
+    const path = writeDoc(catalog, 'doc1', 'x');
+    await catalog.reindex(path);
+    assert.equal((await collect(catalog.catalogs.words.problems())).length, 1);
+
+    fs.unlinkSync(path);
+    await catalog.reindex(path);
+
+    assert.deepEqual(await collect(catalog.catalogs.words.problems()), []);
+    assert.deepEqual(resolveds, [{ index: 'words', path: 'doc1' }]);
+});
+
 test('a throwing process() does not poison other documents', async (t) => {
     const catalog = makeCatalog(t, {
         words: {

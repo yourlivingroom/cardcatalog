@@ -59,10 +59,14 @@ per file per index: a document's old cards are removed in the same batch that
 writes its new ones. Unchanged files (by mtime) are skipped on restart, so
 re-opening a catalog over a large directory is cheap.
 
-If `process` throws, that document is quarantined: it contributes no entries,
-the error is recorded (in the index's `problemDocuments` sublevel), and the
-document is retried the next time it changes. One bad document never poisons
-the rest of the catalog.
+If `process` throws, that document is quarantined — atomically: cards emitted
+before the throw are discarded, the document's old cards are removed, and the
+error is recorded, all in one batch. A quarantined document contributes
+nothing to the index until it's retried, which happens when the file changes,
+when `reindex()` is called, or on the next startup sweep; the record clears
+automatically on success. Quarantined documents are visible through
+`problems()` and the `'problem'`/`'resolved'` events. One bad document never
+poisons the rest of the catalog.
 
 ## API
 
@@ -98,6 +102,9 @@ the rest of the catalog.
   skip past it. Omitted bounds are open ends; `getRange({})` scans the whole
   index. `reverse` walks high-to-low; `limit` caps yielded entries and applies
   after reversal, so `{ reverse: true, limit: n }` is "last n".
+- `catalog.catalogs.<name>.problems()` — async generator over this index's
+  quarantined documents: `{ path, at, message, stack }`, as recorded when
+  `process` threw.
 - `catalog.reindex(path)` — index (or, if deleted, de-index) a document right
   now instead of waiting for the watcher; resolves when done. Takes a
   `dataPath`-relative or absolute path. Use it when your own code writes a
@@ -107,6 +114,11 @@ the rest of the catalog.
   initial sweep has been enumerated _and_ every queued update has been
   applied. The first `'idle'` doubles as a ready signal; later ones mean
   "caught up again".
+- Event `'problem'` — `{ index, path, error }`, emitted each time a document
+  is quarantined (including repeat failures on retry).
+- Event `'resolved'` — `{ index, path }`, emitted when a previously
+  quarantined document is successfully reindexed or removed. Between these
+  two events you never need to poll `problems()`.
 
 Matches yielded by `get`/`getMany`/`getRange` look like:
 

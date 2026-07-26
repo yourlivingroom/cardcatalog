@@ -87,6 +87,7 @@ export default function cardcatalog(indexes, opts = {}) {
 
             if (
                 !remove &&
+                !fileMeta.failed &&
                 fileMeta.updatedAt &&
                 fileMeta.updatedAt >= new Date(stats.mtimeMs).toISOString()
             ) {
@@ -95,6 +96,7 @@ export default function cardcatalog(indexes, opts = {}) {
             }
 
             const emitted = [];
+            let failure = null;
 
             if (!remove) {
                 try {
@@ -104,15 +106,12 @@ export default function cardcatalog(indexes, opts = {}) {
                         { path: relPath },
                     );
                 } catch (e) {
-                    await indexDbs[k].sublevel('problemDocuments').put(
-                        relPath,
-                        {
-                            at: new Date().toISOString(),
-                            message: e.message,
-                            stack: e.stack,
-                        },
-                        { valueEncoding: 'json' },
-                    );
+                    // Quarantine is all-or-nothing: cards emitted before the
+                    // throw are discarded, and the problem record is written
+                    // as part of the same batch that clears the document's
+                    // old cards.
+                    failure = e;
+                    emitted.length = 0;
                 }
             }
 
@@ -158,11 +157,23 @@ export default function cardcatalog(indexes, opts = {}) {
                     keyEncoding: charwise,
                     valueEncoding: 'utf8',
                 })),
-                {
-                    type: 'del',
-                    sublevel: problemDocumentsSublevel,
-                    key: relPath,
-                },
+                failure
+                    ? {
+                          type: 'put',
+                          sublevel: problemDocumentsSublevel,
+                          key: relPath,
+                          value: {
+                              at: new Date().toISOString(),
+                              message: failure.message,
+                              stack: failure.stack,
+                          },
+                          valueEncoding: 'json',
+                      }
+                    : {
+                          type: 'del',
+                          sublevel: problemDocumentsSublevel,
+                          key: relPath,
+                      },
                 remove
                     ? {
                           type: 'del',
@@ -176,10 +187,26 @@ export default function cardcatalog(indexes, opts = {}) {
                           value: {
                               indexKeys: emitted.map(([k]) => k),
                               updatedAt: new Date(stats.mtimeMs).toISOString(),
+                              // `failed` defeats the mtime skip-guard above,
+                              // so quarantined documents stay retryable even
+                              // though their updatedAt is current.
+                              ...(failure ? { failed: true } : {}),
                           },
                           valueEncoding: 'json',
                       },
             ]);
+
+            if (failure) {
+                catalog.emit('problem', {
+                    index: k,
+                    path: relPath,
+                    error: failure,
+                });
+            } else if (fileMeta.failed) {
+                // Previously quarantined, now successfully indexed or
+                // removed — either way it's no longer a problem.
+                catalog.emit('resolved', { index: k, path: relPath });
+            }
         }
     }
 
@@ -360,6 +387,22 @@ export default function cardcatalog(indexes, opts = {}) {
                         }
 
                         yield* scanIndex(levelDb, indexName, iterOpts);
+                    },
+
+                    // Documents quarantined because process() threw, as
+                    // recorded at the time of the failure.
+                    async *problems() {
+                        const problemsSublevel = await levelDb.sublevel(
+                            'problemDocuments',
+                            { valueEncoding: 'json' },
+                        );
+
+                        for await (const [
+                            path,
+                            record,
+                        ] of problemsSublevel.iterator()) {
+                            yield { path, ...record };
+                        }
                     },
                 },
             ]),
