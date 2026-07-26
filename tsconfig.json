@@ -12,5 +12,5 @@
         "skipLibCheck": false,
         "allowJs": false
     },
-    "files": ["index.d.mts", "test/types.test-d.ts"]
+    "files": ["index.d.mts", "test-d/index.test-d.ts"]
 }

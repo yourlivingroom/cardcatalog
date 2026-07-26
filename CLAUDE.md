@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Debug logging: set `CARDCATALOG_DEBUG=1` to enable per-document index bookkeeping output
 - Test: `npm test` (node:test over `test/`); single file: `node --test test/cardcatalog.test.mjs`; single test: add `--test-name-pattern="<name>"`
 - Coverage: `npm run coverage` (c8, enforces 100% on every metric via `--100`; `tools/coverage-badge.mjs` renders `coverage/coverage-summary.json` as an SVG badge, published by CI to the `badges` branch). The `CARDCATALOG_DEBUG` branch binds `console.log` at module load, which is why `test/debug-logging.test.mjs` is a separate file — it needs its own process to set the env var and stub the logger before import.
-- Typecheck: `npm run typecheck` (tsc --noEmit over `index.d.mts` + `test/types.test-d.ts`)
+- Typecheck: `npm run typecheck` (tsc --noEmit over `index.d.mts` + `test-d/index.test-d.ts`)
 - Format: `npm run format` (prettier; check-only via `npm run format:check`)
 - Lint: `npm run lint` (eslint, zero warnings tolerated)
 
@@ -24,7 +24,7 @@ Tests run against real temp directories (`fs.mkdtemp`) rather than a mock fs —
 
 Hand-written `index.d.mts` (`.d.mts`, not `.d.ts` — node16 resolution pairs declarations to `index.mjs` by extension). Checked three ways, all of which must stay in place for the types to mean anything:
 
-1. `test/types.test-d.ts` — compile-time assertions via an `Expect<Equal<>>` helper plus ts-expect-error for negative cases (an unused directive is itself an error, so negatives can't silently stop testing).
+1. `test-d/index.test-d.ts` — compile-time assertions via an `Expect<Equal<>>` helper plus ts-expect-error for negative cases (an unused directive is itself an error, so negatives can't silently stop testing). It lives in `test-d/`, NOT `test/`: Node's test runner treats every file under `test/` as a test file, and Node 22+ strips TypeScript natively, so it would be _executed_ — and its deliberately-invalid calls throw at runtime.
 2. `skipLibCheck` is deliberately **false** in tsconfig: with it on, errors inside `index.d.mts` are only caught where a test happens to touch them.
 3. Runtime surface tests in `cardcatalog.test.mjs` (`runtime surface matches the type declarations`, plus the `Problem`/event payload shape tests) enumerate actual object keys — the only guard against declarations drifting from the implementation, which no amount of type-level testing can catch.
 
