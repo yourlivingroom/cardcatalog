@@ -614,6 +614,78 @@ test('awaitWriteFinish can be enabled through the chokidar opt', async (t) => {
     });
 });
 
+test('a file vanishing before its read is not an error', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { shouldIndex: () => false },
+    );
+
+    const errors = [];
+    catalog.on('error', (e) => errors.push(e));
+
+    const path = writeDoc(catalog, 'doc1', 'stray');
+    const realReadFile = fs.promises.readFile;
+    fs.promises.readFile = async () => {
+        throw Object.assign(new Error('vanished'), { code: 'ENOENT' });
+    };
+    t.after(() => {
+        fs.promises.readFile = realReadFile;
+    });
+
+    // Resolves quietly: the unlink event is presumed to be on its way.
+    await catalog.reindex(path);
+
+    fs.promises.readFile = realReadFile;
+    assert.equal(await catalog.indexes.words.get('stray'), null);
+    assert.deepEqual(errors, []);
+});
+
+test("watcher-driven failures emit 'error'", async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    const realReadFile = fs.promises.readFile;
+    fs.promises.readFile = async () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    };
+    t.after(() => {
+        fs.promises.readFile = realReadFile;
+    });
+
+    const errorFired = once(catalog, 'error');
+    writeDoc(catalog, 'doc1', 'unreadable');
+
+    const [error] = await errorFired;
+    assert.equal(error.code, 'EACCES');
+    fs.promises.readFile = realReadFile;
+});
+
+test("reindex() failures reject the caller, not 'error'", async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { shouldIndex: () => false },
+    );
+
+    const errors = [];
+    catalog.on('error', (e) => errors.push(e));
+
+    const path = writeDoc(catalog, 'doc1', 'mine');
+    const realReadFile = fs.promises.readFile;
+    fs.promises.readFile = async () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    };
+    t.after(() => {
+        fs.promises.readFile = realReadFile;
+    });
+
+    await assert.rejects(() => catalog.reindex(path), { code: 'EACCES' });
+
+    fs.promises.readFile = realReadFile;
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(errors, []);
+});
+
 test('catalogs is a deprecated alias for indexes', async (t) => {
     const catalog = makeCatalog(t, { words: wordIndex });
 

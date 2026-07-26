@@ -127,6 +127,13 @@ poisons the rest of the catalog.
 - Event `'resolved'` — `{ index, path }`, emitted when a previously
   quarantined document is successfully reindexed or removed. Between these
   two events you never need to poll `problems()`.
+- Event `'error'` — infrastructure failures: watcher errors, unreadable
+  files, index-database trouble. Standard EventEmitter semantics, so with no
+  listener attached this throws — deliberately, because a silently stale
+  index is worse than a crash. Note the split: a document whose `process`
+  throws is a `'problem'`, not an `'error'`; and a failed `reindex()` rejects
+  its own promise instead of emitting here, so every failure is reported
+  exactly once.
 
 Matches yielded by `get`/`getMany`/`getRange` look like:
 

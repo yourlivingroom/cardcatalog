@@ -77,9 +77,21 @@ export default function cardcatalog(indexes, opts = {}) {
     );
 
     async function updatePath(relPath, remove, stats) {
-        const fileContent = remove
-            ? undefined
-            : await fs.promises.readFile(toAbsPath(relPath));
+        let fileContent;
+        if (!remove) {
+            try {
+                fileContent = await fs.promises.readFile(toAbsPath(relPath));
+            } catch (e) {
+                if (e.code === 'ENOENT') {
+                    // The file vanished between the event and us reading it.
+                    // Not an error: the watcher's unlink event will (or
+                    // already did) clean up.
+                    debug('Skipping vanished file', relPath);
+                    return;
+                }
+                throw e;
+            }
+        }
 
         for (const k of Object.keys(indexes)) {
             const indexConfig = indexes[k];
@@ -215,7 +227,19 @@ export default function cardcatalog(indexes, opts = {}) {
     }
 
     const queue = new PQueue({ concurrency: 5 });
-    queue.on('error', (e) => console.error('cardcatalog index error:', e));
+
+    // Infrastructure failures — watcher errors, unreadable files, LevelDB
+    // trouble — surface as an 'error' event with standard EventEmitter
+    // semantics: unhandled means it throws, because a silently stale index
+    // is worse than a crash. Document-level process() failures are NOT
+    // errors; they're quarantined and emitted as 'problem'. Every failure
+    // has exactly one owner: reindex() rejections belong to the caller and
+    // are never also emitted here. (p-queue re-emits task rejections as its
+    // own 'error' events, but it uses eventemitter3, which is inert with no
+    // listener — so those are safely ignored.)
+    function emitError(e) {
+        catalog.emit('error', e);
+    }
 
     // The queue lets updates to different files run in parallel, but two
     // updates to the same file must not interleave their read-fileMeta /
@@ -249,18 +273,14 @@ export default function cardcatalog(indexes, opts = {}) {
         const relPath = toRelPath(path);
         if (!opts.shouldIndex(relPath)) return;
         debug('watcher: unlink', relPath);
-        queueFileUpdate(relPath, true).catch((e) =>
-            console.error('cardcatalog remove failed for ' + relPath + ':', e),
-        );
+        queueFileUpdate(relPath, true).catch(emitError);
     }
 
     function queueUpdate(path, stats) {
         const relPath = toRelPath(path);
         if (!opts.shouldIndex(relPath, stats)) return;
         debug('watcher: add/change', relPath);
-        queueFileUpdate(relPath, false, stats).catch((e) =>
-            console.error('cardcatalog update failed for ' + relPath + ':', e),
-        );
+        queueFileUpdate(relPath, false, stats).catch(emitError);
     }
 
     // chokidar won't reliably pick up files created in a directory that didn't
@@ -281,6 +301,7 @@ export default function cardcatalog(indexes, opts = {}) {
         .on('add', queueUpdate)
         .on('change', queueUpdate)
         .on('unlink', queueRemove)
+        .on('error', emitError)
         .on('ready', () => {
             sweepDone = true;
             if (queue.size === 0 && queue.pending === 0) {
