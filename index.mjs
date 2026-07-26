@@ -356,6 +356,22 @@ export default function cardcatalog(indexes, opts = {}) {
     // exist when the watch began, so ensure it's there first.
     fs.mkdirSync(opts.dataPath, { recursive: true });
 
+    // On Windows, expand 8.3 short names (e.g. RUNNER~1) in the watch root:
+    // libuv's fs-event watcher asserts — a native crash — when the watched
+    // root's spelling differs from the long-form paths events report. This is
+    // a one-time, root-only exception to the no-realpath rule (which is about
+    // per-document identity); if even the root can't be resolved, keep the
+    // lexical spelling and let the watcher try.
+    /* c8 ignore start -- only reachable on win32; exercised by Windows CI */
+    if (process.platform === 'win32') {
+        try {
+            opts.dataPath = fs.realpathSync.native(opts.dataPath);
+        } catch {
+            // Fall through with the lexical spelling.
+        }
+    }
+    /* c8 ignore stop */
+
     // 'idle' means the whole catalog is quiescent, not just the queue — the
     // queue can momentarily drain while chokidar is still enumerating the
     // initial sweep, and that doesn't count.
