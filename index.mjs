@@ -20,6 +20,24 @@ const debug = process.env.CARDCATALOG_DEBUG
 // The `catalogs` deprecation warning fires once per process, not per catalog.
 let warnedCatalogs = false;
 
+// Windows reports EPERM for files in a delete-pending state — the file is
+// gone for practical purposes, but a handle (often the watcher's own) has
+// yet to close. Retry with backoff: a pending delete becomes ENOENT, which
+// callers already treat as removal, while a real permission problem stays
+// EPERM and propagates.
+async function retryingEperm(op) {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await op();
+        } catch (e) {
+            if (e.code !== 'EPERM' || attempt >= 5) {
+                throw e;
+            }
+            await new Promise((r) => setTimeout(r, 10 * 2 ** attempt));
+        }
+    }
+}
+
 function shallowMerge(o1, o2) {
     const result = {};
 
@@ -129,7 +147,9 @@ export default function cardcatalog(indexes, opts = {}) {
         let fileContent;
         if (!remove) {
             try {
-                fileContent = await fs.promises.readFile(toAbsPath(relPath));
+                fileContent = await retryingEperm(() =>
+                    fs.promises.readFile(toAbsPath(relPath)),
+                );
             } catch (e) {
                 if (e.code === 'ENOENT') {
                     // The file vanished between the event and us reading it.
@@ -499,7 +519,9 @@ export default function cardcatalog(indexes, opts = {}) {
 
             let stats;
             try {
-                stats = await fs.promises.stat(toAbsPath(relPath));
+                stats = await retryingEperm(() =>
+                    fs.promises.stat(toAbsPath(relPath)),
+                );
             } catch (e) {
                 if (e.code === 'ENOENT') {
                     return queueFileUpdate(relPath, true);

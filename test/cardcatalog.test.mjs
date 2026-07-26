@@ -44,7 +44,12 @@ function makeCatalog(t, indexes, opts = {}) {
 
     t.after(async () => {
         await catalog.close();
-        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        });
     });
 
     return catalog;
@@ -112,7 +117,14 @@ test('invalid configs throw at construction', async (t) => {
 
     // Validation is side-effect-free: nothing was created on disk.
     const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() =>
+        fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        }),
+    );
     assert.throws(() =>
         cardcatalog(
             { words: {} },
@@ -137,7 +149,12 @@ test('watcher indexes pre-existing files', async (t) => {
     );
     t.after(async () => {
         await catalog.close();
-        fs.rmSync(rootDir, { recursive: true, force: true });
+        fs.rmSync(rootDir, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        });
     });
 
     const match = await eventually(async () => {
@@ -393,7 +410,12 @@ test('idle fires once the initial sweep is fully indexed', async (t) => {
     );
     t.after(async () => {
         await catalog.close();
-        fs.rmSync(rootDir, { recursive: true, force: true });
+        fs.rmSync(rootDir, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        });
     });
 
     await once(catalog, 'idle');
@@ -704,6 +726,56 @@ test('awaitWriteFinish can be enabled through the chokidar opt', async (t) => {
     await eventually(async () => {
         assert.ok(await catalog.indexes.words.get('psi'), 'no match yet');
     });
+});
+
+test('EPERM during a Windows delete-pending resolves to removal', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { shouldIndex: () => false },
+    );
+
+    const path = writeDoc(catalog, 'doc1', 'win');
+    await catalog.reindex(path);
+    assert.ok(await catalog.indexes.words.get('win'));
+
+    // Simulate Windows's delete-pending state: EPERM until the last handle
+    // closes, then ENOENT.
+    const realStat = fs.promises.stat;
+    let calls = 0;
+    fs.promises.stat = async () => {
+        calls++;
+        throw calls < 3
+            ? Object.assign(new Error('pending'), { code: 'EPERM' })
+            : Object.assign(new Error('gone'), { code: 'ENOENT' });
+    };
+    t.after(() => {
+        fs.promises.stat = realStat;
+    });
+
+    await catalog.reindex(path);
+    fs.promises.stat = realStat;
+    assert.equal(await catalog.indexes.words.get('win'), null);
+});
+
+test('persistent EPERM is a real error', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { shouldIndex: () => false },
+    );
+
+    const path = writeDoc(catalog, 'doc1', 'locked');
+    const realStat = fs.promises.stat;
+    fs.promises.stat = async () => {
+        throw Object.assign(new Error('locked'), { code: 'EPERM' });
+    };
+    t.after(() => {
+        fs.promises.stat = realStat;
+    });
+
+    await assert.rejects(() => catalog.reindex(path), { code: 'EPERM' });
+    fs.promises.stat = realStat;
 });
 
 test('a file vanishing before its read is not an error', async (t) => {

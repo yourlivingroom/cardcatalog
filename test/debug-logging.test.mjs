@@ -25,7 +25,12 @@ test('CARDCATALOG_DEBUG turns on debug logging', async (t) => {
     );
     t.after(async () => {
         await catalog.close();
-        fs.rmSync(root, { recursive: true, force: true });
+        fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        });
     });
 
     const path = pathLib.join(catalog.dataPath, 'doc1');
