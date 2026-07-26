@@ -52,7 +52,7 @@ its entries disappear.
 ## Usage
 
 When a file is created or modified, it is run through each index's
-`process(fileBuffer, emit, opts)` function. `emit(key, value)` may be called
+`process(fileBuffer, emit, { path })` function. `emit(key, value)` may be called
 zero, one, or multiple times, and each call adds an index entry pointing back to
 the processed file. If the file is modified later, an atomic transaction drops
 any associated index entries and repopulates them via another call to
@@ -66,7 +66,9 @@ they were `process()`ed are ignored at startup.
 
 `emit()` keys must be (possibly nested) arrays of strings, numbers, booleans,
 and `null`s. Non-array keys will be coerced into singleton arrays (e.g.,
-`emit(5, <value>)` emits to the key `[5]`).
+`emit(5, <value>)` emits to the key `[5]`, retrievable as either `5` or `[5]`,
+and reported back as `5`). `undefined` is rejected anywhere in a key: it is
+reserved as the internal range-scan sentinel.
 
 Indexes may later be queried with `getMany(keyPrefix)`, which will return all
 entries with keys of the form `[...keyPrefix, ...other]` (including exact
@@ -75,9 +77,11 @@ bound. Ordering is defined by [charwise].
 
 [charwise]: https://github.com/dominictarr/charwise
 
-If `process()` throws or rejects, no index entries are added to the index, that
-document is added to the index's "problem set" (queryable by `problems()`) and a
-`problem` event is emitted.
+If `process()` throws or rejects, no index entries are added to the index — any
+entries it emitted before throwing are discarded, and any entries left over from
+a previous run are dropped — that document is added to the index's "problem set"
+(queryable by `problems()`) and a `problem` event is emitted. It is retried the
+next time the file changes, on the next `reindex()`, or at the next startup.
 
 ## API
 
@@ -95,18 +99,19 @@ may provide:
 
 `opts` provides further `cardcatalog` options:
 
-- `dataPath` — directory of documents to watch (default `'./db'`, created if
+- `dataPath` - directory of documents to watch (default `'./db'`, created if
   missing).
-- `indexPath` — where the index databases live (default `'./index'`, created if
+- `indexPath` - where the index databases live (default `'./index'`, created if
   missing).
-- `shouldIndex(relPath, stats?)` - determines whether a file found in the
-  watched directory is `process()`ed or not. Return `true` for documents that
-  should be indexed and `false` for those that should be skipped. Called in all
-  situations before a document would be passed to `process()`.
-- `chokidar` — options passed verbatim to
-  [`chokidar.watch`](https://github.com/paulmillr/chokidar#api) for watcher
-  tuning (see
-  [Partially-written files](#partially-written-files)).
+- `shouldIndex(relPath, stats?)` - determines whether a document in the watched
+  directory is indexed or not. Return `true` for documents that should be
+  indexed and `false` for those that should be skipped. Consulted for every
+  document however it arrives — watcher event or `reindex()` — and on deletion
+  as well, so a skipped document is never touched in either direction. `stats`
+  is present when the file exists and absent when it has been deleted.
+- `chokidar` - options passed verbatim to
+  [`chokidar.watch`](https://github.com/paulmillr/chokidar#getting-started) for
+  watcher tuning (see [Partially-written files](#partially-written-files)).
 
 ### `catalog`
 
@@ -125,22 +130,25 @@ may provide:
 - `catalog.reindex(path)` - forces reindexing of the document at the specified
   path immediately. Returns a promise that resolves when the index is up to date
   for the specified document. Useful for read-your-writes situations. Resolves
-  to `true` if `process()` ran, or `false` if `shouldIndex()` filtered out the
-  document. Path should be `dataPath`-relative or absolute.
-- `catalog.close()` — stop watching, drain pending work, close the databases.
-- Event `'idle'` — emitted whenever the catalog goes fully quiescent: the
+  to `true` if the document was handled, or `false` if `shouldIndex()` filtered
+  it out. Note that "handled" doesn't guarantee `process()` ran: a deleted
+  document is de-indexed instead, and one whose mtime hasn't moved since it was
+  last indexed is skipped as already up to date. Path should be
+  `dataPath`-relative or absolute.
+- `catalog.close()` - stop watching, drain pending work, close the databases.
+  Returns a promise that resolves when cleanup is complete.
+- Event `'idle'` - emitted whenever the catalog goes fully quiescent: the
   initial sweep has been enumerated _and_ every queued update has been
   applied. The first `'idle'` doubles as a ready signal; later ones mean
   "caught up again".
-- Event `'problem'` — `{ index, path, error }`, emitted each time a document
+- Event `'problem'` - `{ index, path, error }`, emitted each time a document
   is quarantined (including repeat failures on retry).
-- Event `'resolved'` — `{ index, path }`, emitted when a previously
+- Event `'resolved'` - `{ index, path }`, emitted when a previously
   quarantined document is successfully reindexed or removed. Between these
   two events you never need to poll `problems()`.
-- Event `'error'` — infrastructure failures: watcher errors, unreadable
+- Event `'error'` - infrastructure failures: watcher errors, unreadable
   files, index-database trouble. Standard EventEmitter semantics, so with no
-  listener attached this throws — deliberately, because a silently stale
-  index is worse than a crash. Note the split: a document whose `process`
+  listener attached this throws. Note the split: a document whose `process`
   throws is a `'problem'`, not an `'error'`; and a failed `reindex()` rejects
   its own promise instead of emitting here, so every failure is reported
   exactly once.
@@ -159,12 +167,13 @@ Matches yielded by `get`/`getMany`/`getRange` look like:
 
 ## TypeScript
 
-Types ship with the package — no `@types` install. Index names are tracked
+Types ship with the package--no `@types` install. Index names are tracked
 through the factory, so `catalog.indexes.byAuthor` is known and a typo is a
 compile error. Emitted value types flow through to matches when a config is
 annotated:
 
 ```ts
+import cardcatalog from '@livingroom/cardcatalog';
 import type { IndexConfig } from '@livingroom/cardcatalog';
 
 const indexes: Record<'byAuthor', IndexConfig<{ title: string }>> = {
@@ -181,11 +190,13 @@ match?.indexValue.title; // string
 Without an annotation, `indexValue` is `unknown` rather than `any`, so it has
 to be narrowed. `Key` excludes `undefined`, matching the runtime guard.
 
-## Partially-written files
+## Gotchas
+
+### Partially-written files
 
 The watcher can fire while a document is still being written, indexing half a
 file. The robust fix is on the writer's side: write to a temp file and
-`rename` it into the watched directory — renames are atomic, so the watcher
+`rename` it into the watched directory. Renames are atomic, so the watcher
 only ever sees complete documents.
 
 If you don't control the writer, chokidar's `awaitWriteFinish` holds events
@@ -199,20 +210,23 @@ const catalog = cardcatalog(indexes, {
 
 Two costs to know about: every watcher-driven update now lags by the
 stability threshold (2 seconds by default), and held initial-scan events
-arrive _after_ chokidar finishes enumerating — so the first `'idle'` can fire
+arrive _after_ chokidar finishes enumerating, so the first `'idle'` can fire
 before pre-existing documents are indexed. Prefer write-then-rename when you
 can.
 
-## Decoding is your job
+### Decoding is your job
 
-`process` receives a raw `Buffer` on purpose. If cardcatalog decoded for you,
-it would have to pick a strictness policy — and `buffer.toString('utf8')`
-never fails: when a binary file sneaks into what you thought was a directory
-of text files, invalid bytes are silently replaced with `U+FFFD` and the
-garbage goes straight into your index.
+`process` receives a raw [Buffer]. In the likely event you're indexing text
+files, you'll need to either `buffer.toString('utf8')` for lax interpretation
+with the danger of [mojibake] or use a [TextDecoder] in `fatal` mode for strict
+interpretation that throws on invalidly-encoded characters (resulting in the
+document being added to the problem set.)
 
-If that hazard applies to your data, decode strictly — one line buys you
-loud, quarantined failures instead of mojibake:
+[Buffer]: https://nodejs.org/api/buffer.html
+[mojibake]: https://en.wikipedia.org/wiki/Mojibake
+[TextDecoder]: https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder
+
+An example of the latter:
 
 ```js
 const utf8 = new TextDecoder('utf-8', { fatal: true });
@@ -220,8 +234,8 @@ const utf8 = new TextDecoder('utf-8', { fatal: true });
 const catalog = cardcatalog({
     words: {
         process: (content, emit) => {
-            // Throws on invalid UTF-8, so a stray binary file is quarantined
-            // in problemDocuments instead of being indexed as garbage.
+            // Throws on invalid UTF-8, so a stray binary file lands in the
+            // problem set instead of being indexed as garbage.
             const text = utf8.decode(content);
 
             for (const word of text.split(/\s+/g)) {
@@ -233,9 +247,6 @@ const catalog = cardcatalog({
     },
 });
 ```
-
-If lenient decoding is what you want, `content.toString('utf8')` is right
-there — the point is that you choose.
 
 ## License
 
