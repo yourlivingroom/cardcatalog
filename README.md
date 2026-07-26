@@ -90,7 +90,10 @@ order.
 
 Documents are identified by their `dataPath`-relative path, always with
 forward slashes — on every platform, so an index directory built on one OS is
-readable on another. Updates are atomic
+readable on another. Nothing absolute is ever stored, so moving or renaming
+the enclosing directories is fine as long as `dataPath` and `indexPath` still
+point at the same content: the index is picked up as-is, with no
+re-processing. Updates are atomic
 per file per index: a document's old cards are removed in the same batch that
 writes its new ones. Unchanged files (by mtime) are skipped on restart, so
 re-opening a catalog over a large directory is cheap.

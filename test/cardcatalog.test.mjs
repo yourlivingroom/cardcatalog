@@ -555,6 +555,63 @@ test('reindex() passes stats to shouldIndex when the file exists', async (t) => 
     assert.equal(seen[1], undefined);
 });
 
+test('an index survives moving the whole app directory', async (t) => {
+    const base = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+    t.after(() =>
+        fs.rmSync(base, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        }),
+    );
+
+    const before = pathLib.join(base, 'app-before');
+    const after = pathLib.join(base, 'app-after');
+
+    let processCalls = 0;
+    const indexes = () => ({
+        words: {
+            valueEncoding: 'json',
+            process: (content, emit) => {
+                processCalls++;
+                wordIndex.process(content, emit);
+            },
+        },
+    });
+    const at = (root) => ({
+        dataPath: pathLib.join(root, 'db'),
+        indexPath: pathLib.join(root, 'index'),
+    });
+
+    fs.mkdirSync(pathLib.join(before, 'db', 'sub'), { recursive: true });
+    fs.writeFileSync(pathLib.join(before, 'db', 'doc1'), 'alpha');
+    fs.writeFileSync(pathLib.join(before, 'db', 'sub', 'doc2'), 'beta');
+
+    const first = cardcatalog(indexes(), at(before));
+    await once(first, 'idle');
+    await first.close();
+    const callsBeforeMove = processCalls;
+    assert.equal(callsBeforeMove, 2);
+
+    // Pick up the whole app — db/ and index/ keep their relative positions.
+    fs.renameSync(before, after);
+
+    const second = cardcatalog(indexes(), at(after));
+    t.after(() => second.close());
+    await once(second, 'idle');
+
+    assert.equal((await second.indexes.words.get('alpha')).path, 'doc1');
+
+    const beta = await second.indexes.words.get('beta');
+    assert.equal(beta.path, 'sub/doc2');
+    assert.equal((await beta.read('utf8')).toString(), 'beta');
+
+    // Nothing was re-processed: the stored fileMeta keys still matched, which
+    // is only true if paths were persisted relative to dataPath.
+    assert.equal(processCalls, callsBeforeMove);
+});
+
 test('reindex() accepts dataPath-relative paths', async (t) => {
     const catalog = makeCatalog(t, { words: wordIndex });
 
