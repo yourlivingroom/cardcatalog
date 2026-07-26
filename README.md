@@ -54,9 +54,13 @@ its entries disappear.
 
 For every file in `dataPath`, each index's `process(content, emit, { path })`
 is called with the file's content as a raw `Buffer`. Every `emit(key, value)`
-writes one card: the emitted key (a string, number, or array of them) plus the
+writes one card: the emitted key — anything [charwise] can encode: `null`,
+booleans, numbers, strings, and arbitrarily nested arrays of these — plus the
 document's path become a sorted LevelDB key, so looking up a key — or a key
-prefix, or a range — is a contiguous scan.
+prefix, or a range — is a contiguous scan, in charwise's cross-type sort
+order.
+
+[charwise]: https://github.com/dominictarr/charwise
 
 Documents are identified by their `dataPath`-relative path, always with
 forward slashes — on every platform, so an index directory built on one OS is
