@@ -80,7 +80,7 @@ test('watcher indexes pre-existing files', async (t) => {
     });
 
     const match = await eventually(async () => {
-        const m = await catalog.catalogs.words.get('alpha');
+        const m = await catalog.indexes.words.get('alpha');
         assert.ok(m, 'no match yet');
         return m;
     });
@@ -97,12 +97,12 @@ test('watcher removes entries for deleted files', async (t) => {
 
     const path = writeDoc(catalog, 'doc1', 'upsilon');
     await eventually(async () => {
-        assert.ok(await catalog.catalogs.words.get('upsilon'), 'not indexed');
+        assert.ok(await catalog.indexes.words.get('upsilon'), 'not indexed');
     });
 
     fs.unlinkSync(path);
     await eventually(async () => {
-        assert.equal(await catalog.catalogs.words.get('upsilon'), null);
+        assert.equal(await catalog.indexes.words.get('upsilon'), null);
     });
 });
 
@@ -112,7 +112,7 @@ test('watcher picks up files created after startup', async (t) => {
     writeDoc(catalog, 'doc1', 'gamma delta');
 
     const match = await eventually(async () => {
-        const m = await catalog.catalogs.words.get('gamma');
+        const m = await catalog.indexes.words.get('gamma');
         assert.ok(m, 'no match yet');
         return m;
     });
@@ -126,7 +126,7 @@ test('reindex() indexes a file without waiting for the watcher', async (t) => {
     const path = writeDoc(catalog, 'doc1', 'epsilon');
     await catalog.reindex(path);
 
-    const match = await catalog.catalogs.words.get('epsilon');
+    const match = await catalog.indexes.words.get('epsilon');
     assert.equal(match.path, 'doc1');
 });
 
@@ -135,11 +135,11 @@ test('reindex() of a missing file removes its entries', async (t) => {
 
     const path = writeDoc(catalog, 'doc1', 'zeta');
     await catalog.reindex(path);
-    assert.ok(await catalog.catalogs.words.get('zeta'));
+    assert.ok(await catalog.indexes.words.get('zeta'));
 
     fs.unlinkSync(path);
     await catalog.reindex(path);
-    assert.equal(await catalog.catalogs.words.get('zeta'), null);
+    assert.equal(await catalog.indexes.words.get('zeta'), null);
 });
 
 test('re-processing a changed file replaces its old keys', async (t) => {
@@ -154,8 +154,8 @@ test('re-processing a changed file replaces its old keys', async (t) => {
     fs.writeFileSync(path, 'theta');
     await catalog.reindex(path);
 
-    assert.equal(await catalog.catalogs.words.get('eta'), null);
-    assert.ok(await catalog.catalogs.words.get('theta'));
+    assert.equal(await catalog.indexes.words.get('eta'), null);
+    assert.ok(await catalog.indexes.words.get('theta'));
 });
 
 test('get() returns null on no match and throws on several', async (t) => {
@@ -164,9 +164,9 @@ test('get() returns null on no match and throws on several', async (t) => {
     await catalog.reindex(writeDoc(catalog, 'doc1', 'iota'));
     await catalog.reindex(writeDoc(catalog, 'doc2', 'iota'));
 
-    assert.equal(await catalog.catalogs.words.get('nope'), null);
+    assert.equal(await catalog.indexes.words.get('nope'), null);
     await assert.rejects(
-        () => catalog.catalogs.words.get('iota'),
+        () => catalog.indexes.words.get('iota'),
         /Multiple matches for "iota" in index "words": doc1, doc2/,
     );
 });
@@ -178,7 +178,7 @@ test('getMany() yields every matching document', async (t) => {
     await catalog.reindex(writeDoc(catalog, 'doc2', 'kappa'));
     await catalog.reindex(writeDoc(catalog, 'doc3', 'lambda'));
 
-    const matches = await collect(catalog.catalogs.words.getMany('kappa'));
+    const matches = await collect(catalog.indexes.words.getMany('kappa'));
     assert.deepEqual(matches.map((m) => m.path).sort(), ['doc1', 'doc2']);
 });
 
@@ -198,12 +198,12 @@ test('compound keys support prefix queries', async (t) => {
     await catalog.reindex(writeDoc(catalog, 'doc1', 'red'));
     await catalog.reindex(writeDoc(catalog, 'doc2', 'blue'));
 
-    const exact = await collect(catalog.catalogs.byTag.getMany(['tag', 'red']));
+    const exact = await collect(catalog.indexes.byTag.getMany(['tag', 'red']));
     assert.equal(exact.length, 1);
     assert.deepEqual(exact[0].key, ['tag', 'red']);
     assert.equal(exact[0].indexValue, 'red');
 
-    const prefixed = await collect(catalog.catalogs.byTag.getMany(['tag']));
+    const prefixed = await collect(catalog.indexes.byTag.getMany(['tag']));
     assert.deepEqual(prefixed.map((m) => m.indexValue).sort(), ['blue', 'red']);
 });
 
@@ -215,7 +215,7 @@ test('getRange() scans between bounds', async (t) => {
     await catalog.reindex(writeDoc(catalog, 'doc3', 'cherry'));
     await catalog.reindex(writeDoc(catalog, 'doc4', 'date'));
 
-    const words = catalog.catalogs.words;
+    const words = catalog.indexes.words;
     const keys = async (range) =>
         (await collect(words.getRange(range))).map((m) => m.key);
 
@@ -237,7 +237,7 @@ test('getRange() supports reverse and limit', async (t) => {
     await catalog.reindex(writeDoc(catalog, 'doc3', 'cherry'));
     await catalog.reindex(writeDoc(catalog, 'doc4', 'date'));
 
-    const words = catalog.catalogs.words;
+    const words = catalog.indexes.words;
     const keys = async (range) =>
         (await collect(words.getRange(range))).map((m) => m.key);
 
@@ -279,7 +279,7 @@ test('getRange() bounds address whole compound-key subtrees', async (t) => {
     await catalog.reindex(writeDoc(catalog, 'doc2', 'b'));
     await catalog.reindex(writeDoc(catalog, 'doc3', 'c'));
 
-    const byTag = catalog.catalogs.byTag;
+    const byTag = catalog.indexes.byTag;
     const values = async (range) =>
         (await collect(byTag.getRange(range))).map((m) => m.indexValue);
 
@@ -306,15 +306,15 @@ test('shouldIndex filters documents out', async (t) => {
     const skipped = writeDoc(catalog, 'doc2.skip', 'nu');
 
     await eventually(async () => {
-        assert.ok(await catalog.catalogs.words.get('mu'), 'no match yet');
+        assert.ok(await catalog.indexes.words.get('mu'), 'no match yet');
     });
-    assert.equal(await catalog.catalogs.words.get('nu'), null);
+    assert.equal(await catalog.indexes.words.get('nu'), null);
 
     // Unlink events go through the same filter.
     fs.unlinkSync(skipped);
     fs.unlinkSync(kept);
     await eventually(async () => {
-        assert.equal(await catalog.catalogs.words.get('mu'), null);
+        assert.equal(await catalog.indexes.words.get('mu'), null);
     });
 });
 
@@ -340,7 +340,7 @@ test('idle fires once the initial sweep is fully indexed', async (t) => {
     // No polling: idle promises every pre-existing document is queryable.
     for (let i = 0; i < 20; i++) {
         assert.ok(
-            await catalog.catalogs.words.get('omicron' + i),
+            await catalog.indexes.words.get('omicron' + i),
             'doc' + i + ' not indexed at idle',
         );
     }
@@ -353,7 +353,7 @@ test('idle fires again after later changes are folded in', async (t) => {
     writeDoc(catalog, 'doc1', 'pi');
     await once(catalog, 'idle');
 
-    assert.ok(await catalog.catalogs.words.get('pi'));
+    assert.ok(await catalog.indexes.words.get('pi'));
 });
 
 test('reindex() accepts dataPath-relative paths', async (t) => {
@@ -362,7 +362,7 @@ test('reindex() accepts dataPath-relative paths', async (t) => {
     writeDoc(catalog, 'doc1', 'rho');
     await catalog.reindex('doc1');
 
-    assert.ok(await catalog.catalogs.words.get('rho'));
+    assert.ok(await catalog.indexes.words.get('rho'));
 });
 
 test('reindex() rejects paths outside dataPath', async (t) => {
@@ -403,8 +403,8 @@ test('absolute and relative spellings are one identity', async (t) => {
 
     // If the two spellings were keyed separately, 'sigma' would survive as
     // an orphan of the absolute-path identity.
-    assert.equal(await catalog.catalogs.words.get('sigma'), null);
-    assert.ok(await catalog.catalogs.words.get('tau'));
+    assert.equal(await catalog.indexes.words.get('sigma'), null);
+    assert.ok(await catalog.indexes.words.get('tau'));
 });
 
 test('rapid updates to the same file do not interleave', async (t) => {
@@ -435,8 +435,8 @@ test('rapid updates to the same file do not interleave', async (t) => {
 
     await Promise.all([first, second]);
 
-    assert.equal(await catalog.catalogs.words.get('one'), null);
-    assert.ok(await catalog.catalogs.words.get('two'));
+    assert.equal(await catalog.indexes.words.get('one'), null);
+    assert.ok(await catalog.indexes.words.get('two'));
 });
 
 test('a quarantined document is recorded and reported', async (t) => {
@@ -454,7 +454,7 @@ test('a quarantined document is recorded and reported', async (t) => {
 
     await catalog.reindex(writeDoc(catalog, 'bad', 'boom'));
 
-    const problems = await collect(catalog.catalogs.words.problems());
+    const problems = await collect(catalog.indexes.words.problems());
     assert.equal(problems.length, 1);
     assert.equal(problems[0].path, 'bad');
     assert.equal(problems[0].message, 'kaboom');
@@ -475,7 +475,7 @@ test('quarantine discards cards emitted before the throw', async (t) => {
 
     await catalog.reindex(writeDoc(catalog, 'doc1', 'x'));
 
-    assert.equal(await catalog.catalogs.words.get('early'), null);
+    assert.equal(await catalog.indexes.words.get('early'), null);
 });
 
 test('a quarantined document retries without an mtime bump', async (t) => {
@@ -501,12 +501,12 @@ test('a quarantined document retries without an mtime bump', async (t) => {
 
     const path = writeDoc(catalog, 'doc1', 'x');
     await catalog.reindex(path);
-    assert.equal(await catalog.catalogs.words.get('recovered'), null);
+    assert.equal(await catalog.indexes.words.get('recovered'), null);
 
     // Same file, same mtime: the failed flag must defeat the skip-guard.
     await catalog.reindex(path);
-    assert.ok(await catalog.catalogs.words.get('recovered'));
-    assert.deepEqual(await collect(catalog.catalogs.words.problems()), []);
+    assert.ok(await catalog.indexes.words.get('recovered'));
+    assert.deepEqual(await collect(catalog.indexes.words.problems()), []);
 });
 
 test("'problem' and 'resolved' events track quarantine", async (t) => {
@@ -566,13 +566,32 @@ test('removing a quarantined document also resolves it', async (t) => {
 
     const path = writeDoc(catalog, 'doc1', 'x');
     await catalog.reindex(path);
-    assert.equal((await collect(catalog.catalogs.words.problems())).length, 1);
+    assert.equal((await collect(catalog.indexes.words.problems())).length, 1);
 
     fs.unlinkSync(path);
     await catalog.reindex(path);
 
-    assert.deepEqual(await collect(catalog.catalogs.words.problems()), []);
+    assert.deepEqual(await collect(catalog.indexes.words.problems()), []);
     assert.deepEqual(resolveds, [{ index: 'words', path: 'doc1' }]);
+});
+
+test('catalogs is a deprecated alias for indexes', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex });
+
+    const warnings = [];
+    const onWarning = (w) => warnings.push(w);
+    process.on('warning', onWarning);
+    t.after(() => process.removeListener('warning', onWarning));
+
+    assert.equal(catalog.catalogs, catalog.indexes);
+    assert.equal(catalog.catalogs, catalog.indexes);
+
+    // process.emitWarning delivers on a later tick.
+    await new Promise((r) => setImmediate(r));
+    const deprecations = warnings.filter((w) =>
+        /catalog\.catalogs is deprecated/.test(w.message),
+    );
+    assert.equal(deprecations.length, 1, 'warns exactly once per process');
 });
 
 test('a throwing process() does not poison other documents', async (t) => {
@@ -592,6 +611,6 @@ test('a throwing process() does not poison other documents', async (t) => {
     await catalog.reindex(writeDoc(catalog, 'bad', 'boom'));
     await catalog.reindex(writeDoc(catalog, 'good', 'xi'));
 
-    assert.equal(await catalog.catalogs.words.get('boom'), null);
-    assert.ok(await catalog.catalogs.words.get('xi'));
+    assert.equal(await catalog.indexes.words.get('boom'), null);
+    assert.ok(await catalog.indexes.words.get('xi'));
 });

@@ -17,6 +17,9 @@ const debug = process.env.CARDCATALOG_DEBUG
     ? console.log.bind(console)
     : () => {};
 
+// The `catalogs` deprecation warning fires once per process, not per catalog.
+let warnedCatalogs = false;
+
 function shallowMerge(o1, o2) {
     const result = {};
 
@@ -312,101 +315,94 @@ export default function cardcatalog(indexes, opts = {}) {
         }
     }
 
-    const catalog = Object.assign(new EventEmitter(), {
-        catalogs: Object.fromEntries(
-            Object.entries(indexDbs).map(([indexName, levelDb]) => [
-                indexName,
-                {
-                    async get(key) {
-                        let result = null;
+    const indexApis = Object.fromEntries(
+        Object.entries(indexDbs).map(([indexName, levelDb]) => [
+            indexName,
+            {
+                async get(key) {
+                    let result = null;
 
-                        for await (const match of this.getMany(key)) {
-                            if (result) {
-                                throw new Error(
-                                    'Multiple matches for ' +
-                                        JSON.stringify(key) +
-                                        ' in index ' +
-                                        JSON.stringify(indexName) +
-                                        ': ' +
-                                        result.path +
-                                        ', ' +
-                                        match.path,
-                                );
-                            }
-
-                            result = match;
+                    for await (const match of this.getMany(key)) {
+                        if (result) {
+                            throw new Error(
+                                'Multiple matches for ' +
+                                    JSON.stringify(key) +
+                                    ' in index ' +
+                                    JSON.stringify(indexName) +
+                                    ': ' +
+                                    result.path +
+                                    ', ' +
+                                    match.path,
+                            );
                         }
 
-                        return result;
-                    },
-                    async *getMany(queryKey) {
-                        queryKey = normalizeKey(queryKey);
-                        yield* scanIndex(levelDb, indexName, {
-                            gte: [...queryKey, KEY_BOTTOM],
-                            lte: [...queryKey, KEY_TOP],
-                        });
-                    },
+                        result = match;
+                    }
 
-                    // Range scan over emitted keys. Bounds inherit getMany's
-                    // prefix semantics: each bound addresses a key's whole
-                    // subtree, so gte/lte include the bounding key's subtree
-                    // while gt/lt skip past it entirely. Omitted bounds are
-                    // open ends; getRange() with no bounds scans the whole
-                    // index. reverse walks the range high-to-low; limit caps
-                    // the number of entries yielded (per emitted entry, not
-                    // per distinct key), and applies after reversal.
-                    async *getRange(range = {}) {
-                        const iterOpts = {};
-
-                        if (range.gte !== undefined) {
-                            iterOpts.gte = [
-                                ...normalizeKey(range.gte),
-                                KEY_BOTTOM,
-                            ];
-                        }
-                        if (range.gt !== undefined) {
-                            iterOpts.gt = [...normalizeKey(range.gt), KEY_TOP];
-                        }
-                        if (range.lte !== undefined) {
-                            iterOpts.lte = [
-                                ...normalizeKey(range.lte),
-                                KEY_TOP,
-                            ];
-                        }
-                        if (range.lt !== undefined) {
-                            iterOpts.lt = [
-                                ...normalizeKey(range.lt),
-                                KEY_BOTTOM,
-                            ];
-                        }
-                        if (range.reverse !== undefined) {
-                            iterOpts.reverse = range.reverse;
-                        }
-                        if (range.limit !== undefined) {
-                            iterOpts.limit = range.limit;
-                        }
-
-                        yield* scanIndex(levelDb, indexName, iterOpts);
-                    },
-
-                    // Documents quarantined because process() threw, as
-                    // recorded at the time of the failure.
-                    async *problems() {
-                        const problemsSublevel = await levelDb.sublevel(
-                            'problemDocuments',
-                            { valueEncoding: 'json' },
-                        );
-
-                        for await (const [
-                            path,
-                            record,
-                        ] of problemsSublevel.iterator()) {
-                            yield { path, ...record };
-                        }
-                    },
+                    return result;
                 },
-            ]),
-        ),
+                async *getMany(queryKey) {
+                    queryKey = normalizeKey(queryKey);
+                    yield* scanIndex(levelDb, indexName, {
+                        gte: [...queryKey, KEY_BOTTOM],
+                        lte: [...queryKey, KEY_TOP],
+                    });
+                },
+
+                // Range scan over emitted keys. Bounds inherit getMany's
+                // prefix semantics: each bound addresses a key's whole
+                // subtree, so gte/lte include the bounding key's subtree
+                // while gt/lt skip past it entirely. Omitted bounds are
+                // open ends; getRange() with no bounds scans the whole
+                // index. reverse walks the range high-to-low; limit caps
+                // the number of entries yielded (per emitted entry, not
+                // per distinct key), and applies after reversal.
+                async *getRange(range = {}) {
+                    const iterOpts = {};
+
+                    if (range.gte !== undefined) {
+                        iterOpts.gte = [...normalizeKey(range.gte), KEY_BOTTOM];
+                    }
+                    if (range.gt !== undefined) {
+                        iterOpts.gt = [...normalizeKey(range.gt), KEY_TOP];
+                    }
+                    if (range.lte !== undefined) {
+                        iterOpts.lte = [...normalizeKey(range.lte), KEY_TOP];
+                    }
+                    if (range.lt !== undefined) {
+                        iterOpts.lt = [...normalizeKey(range.lt), KEY_BOTTOM];
+                    }
+                    if (range.reverse !== undefined) {
+                        iterOpts.reverse = range.reverse;
+                    }
+                    if (range.limit !== undefined) {
+                        iterOpts.limit = range.limit;
+                    }
+
+                    yield* scanIndex(levelDb, indexName, iterOpts);
+                },
+
+                // Documents quarantined because process() threw, as
+                // recorded at the time of the failure.
+                async *problems() {
+                    const problemsSublevel = await levelDb.sublevel(
+                        'problemDocuments',
+                        { valueEncoding: 'json' },
+                    );
+
+                    for await (const [
+                        path,
+                        record,
+                    ] of problemsSublevel.iterator()) {
+                        yield { path, ...record };
+                    }
+                },
+            },
+        ]),
+    );
+
+    const catalog = Object.assign(new EventEmitter(), {
+        indexes: indexApis,
         close: async () => {
             await watcher.close();
             await queue.onIdle();
@@ -436,6 +432,23 @@ export default function cardcatalog(indexes, opts = {}) {
                 throw e;
             }
             return queueFileUpdate(relPath, false, stats);
+        },
+    });
+
+    // Deprecated alias for `indexes`, kept for backward compatibility with
+    // existing projects.
+    Object.defineProperty(catalog, 'catalogs', {
+        enumerable: false,
+        get() {
+            if (!warnedCatalogs) {
+                warnedCatalogs = true;
+                process.emitWarning(
+                    'catalog.catalogs is deprecated; use catalog.indexes ' +
+                        'instead.',
+                    'DeprecationWarning',
+                );
+            }
+            return indexApis;
         },
     });
 

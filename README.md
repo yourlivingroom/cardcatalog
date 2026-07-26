@@ -38,7 +38,7 @@ const catalog = cardcatalog(
 // The first 'idle' means every pre-existing document has been indexed.
 await once(catalog, 'idle');
 
-for await (const match of catalog.catalogs.byAuthor.getMany('Le Guin')) {
+for await (const match of catalog.indexes.byAuthor.getMany('Le Guin')) {
     console.log(match.path, '→', match.indexValue);
 }
 ```
@@ -90,19 +90,19 @@ poisons the rest of the catalog.
 
 ### The catalog
 
-- `catalog.catalogs.<name>.get(key)` — the single match for `key`, or `null`.
+- `catalog.indexes.<name>.get(key)` — the single match for `key`, or `null`.
   Throws if there are several (the error names the key, index, and colliding
   paths) — calling `get` asserts the key is unique.
-- `catalog.catalogs.<name>.getMany(key)` — async generator over every match
+- `catalog.indexes.<name>.getMany(key)` — async generator over every match
   for `key`, including compound keys it prefixes: with `emit(['tag', t], …)`,
   `getMany(['tag'])` yields every tag entry.
-- `catalog.catalogs.<name>.getRange({ gt, gte, lt, lte, reverse, limit })` —
+- `catalog.indexes.<name>.getRange({ gt, gte, lt, lte, reverse, limit })` —
   async generator over a key range. Bounds have the same subtree semantics as
   `getMany`: `gte`/`lte` include the bounding key's whole subtree, `gt`/`lt`
   skip past it. Omitted bounds are open ends; `getRange({})` scans the whole
   index. `reverse` walks high-to-low; `limit` caps yielded entries and applies
   after reversal, so `{ reverse: true, limit: n }` is "last n".
-- `catalog.catalogs.<name>.problems()` — async generator over this index's
+- `catalog.indexes.<name>.problems()` — async generator over this index's
   quarantined documents: `{ path, at, message, stack }`, as recorded when
   `process` threw.
 - `catalog.reindex(path)` — index (or, if deleted, de-index) a document right
