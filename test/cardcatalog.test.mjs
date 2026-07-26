@@ -889,6 +889,125 @@ test("reindex() failures reject the caller, not 'error'", async (t) => {
     assert.deepEqual(errors, []);
 });
 
+// Guards index.d.mts against drifting from what the implementation actually
+// exposes; the type tests can only check the declarations' self-consistency.
+test('runtime surface matches the type declarations', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { shouldIndex: () => false },
+    );
+
+    // Ignoring EventEmitter's own _-prefixed instance fields.
+    assert.deepEqual(
+        Object.keys(catalog)
+            .filter((k) => !k.startsWith('_'))
+            .sort(),
+        ['close', 'dataPath', 'indexPath', 'indexes', 'reindex'],
+    );
+    assert.equal(typeof catalog.dataPath, 'string');
+    assert.equal(typeof catalog.indexPath, 'string');
+    assert.equal(typeof catalog.reindex, 'function');
+    assert.equal(typeof catalog.close, 'function');
+    assert.equal(typeof catalog.on, 'function');
+
+    // Presence without access — the getter would fire its deprecation
+    // warning, which another test counts.
+    assert.ok(Object.getOwnPropertyDescriptor(catalog, 'catalogs')?.get);
+
+    assert.deepEqual(Object.keys(catalog.indexes), ['words']);
+    assert.deepEqual(Object.keys(catalog.indexes.words).sort(), [
+        'get',
+        'getMany',
+        'getRange',
+        'problems',
+    ]);
+
+    await catalog.reindex(writeDoc(catalog, 'doc1', 'surface'));
+
+    const match = await catalog.indexes.words.get('surface');
+    assert.deepEqual(Object.keys(match).sort(), [
+        'indexValue',
+        'key',
+        'path',
+        'read',
+        'readSync',
+    ]);
+    assert.equal(typeof match.key, 'string');
+    assert.equal(typeof match.path, 'string');
+    assert.ok(Buffer.isBuffer(await match.read()));
+    assert.equal(typeof (await match.read('utf8')), 'string');
+    assert.ok(Buffer.isBuffer(match.readSync()));
+    assert.equal(typeof match.readSync('utf8'), 'string');
+
+    // reindex resolves to undefined, as Promise<void> claims.
+    assert.equal(await catalog.reindex('doc1'), undefined);
+});
+
+test('problem records match the declared Problem shape', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        {
+            words: {
+                process: () => {
+                    throw new Error('shape');
+                },
+            },
+        },
+        { shouldIndex: () => false },
+    );
+
+    await catalog.reindex(writeDoc(catalog, 'doc1', 'x'));
+
+    const [problem] = await collect(catalog.indexes.words.problems());
+    assert.deepEqual(Object.keys(problem).sort(), [
+        'at',
+        'message',
+        'path',
+        'stack',
+    ]);
+    assert.equal(typeof problem.at, 'string');
+    assert.equal(typeof problem.message, 'string');
+    assert.equal(typeof problem.path, 'string');
+    assert.equal(typeof problem.stack, 'string');
+});
+
+test("'problem' and 'resolved' payloads match their declared shapes", async (t) => {
+    let fail = true;
+    const catalog = makeCatalog(
+        t,
+        {
+            words: {
+                process: (content, emit) => {
+                    if (fail) {
+                        throw new Error('payload');
+                    }
+                    emit('ok', '');
+                },
+            },
+        },
+        { shouldIndex: () => false },
+    );
+
+    const problems = [];
+    const resolveds = [];
+    catalog.on('problem', (p) => problems.push(p));
+    catalog.on('resolved', (r) => resolveds.push(r));
+
+    const path = writeDoc(catalog, 'doc1', 'x');
+    await catalog.reindex(path);
+    fail = false;
+    await catalog.reindex(path);
+
+    assert.deepEqual(Object.keys(problems[0]).sort(), [
+        'error',
+        'index',
+        'path',
+    ]);
+    assert.ok(problems[0].error instanceof Error);
+    assert.deepEqual(Object.keys(resolveds[0]).sort(), ['index', 'path']);
+});
+
 test('catalogs is a deprecated alias for indexes', async (t) => {
     const catalog = makeCatalog(t, { words: wordIndex });
 

@@ -50,6 +50,30 @@ for await (const match of catalog.indexes.byAuthor.getMany('Le Guin')) {
 Drop a new file into `./books` and it's indexed automatically; delete one and
 its entries disappear.
 
+## TypeScript
+
+Types ship with the package — no `@types` install. Index names are tracked
+through the factory, so `catalog.indexes.byAuthor` is known and a typo is a
+compile error. Emitted value types flow through to matches when a config is
+annotated:
+
+```ts
+import type { IndexConfig } from '@livingroom/cardcatalog';
+
+const indexes: Record<'byAuthor', IndexConfig<{ title: string }>> = {
+    byAuthor: {
+        valueEncoding: 'json',
+        process: (content, emit) => emit('Le Guin', { title: 'Earthsea' }),
+    },
+};
+
+const match = await cardcatalog(indexes).indexes.byAuthor.get('Le Guin');
+match?.indexValue.title; // string
+```
+
+Without an annotation, `indexValue` is `unknown` rather than `any`, so it has
+to be narrowed. `Key` excludes `undefined`, matching the runtime guard.
+
 ## How it works
 
 For every file in `dataPath`, each index's `process(content, emit, { path })`

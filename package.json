@@ -21,10 +21,15 @@
     "license": "ISC",
     "author": "Hampton Smith <1743291+hamptonsmith@users.noreply.github.com>",
     "type": "module",
-    "exports": "./index.mjs",
+    "exports": {
+        "types": "./index.d.mts",
+        "default": "./index.mjs"
+    },
     "main": "index.mjs",
+    "types": "./index.d.mts",
     "files": [
-        "index.mjs"
+        "index.mjs",
+        "index.d.mts"
     ],
     "engines": {
         "node": ">=20"
@@ -34,7 +39,8 @@
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "lint": "eslint . --max-warnings 0",
-        "test": "node --test --test-reporter=@voxpelli/node-test-pretty-reporter"
+        "test": "node --test --test-reporter=@voxpelli/node-test-pretty-reporter",
+        "typecheck": "tsc --noEmit"
     },
     "dependencies": {
         "charwise": "^3.0.1",
@@ -44,11 +50,13 @@
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
+        "@types/node": "^26.1.1",
         "@voxpelli/node-test-pretty-reporter": "^1.1.2",
         "badge-maker": "^6.0.0",
         "c8": "^12.0.0",
         "eslint": "^10.8.0",
         "globals": "^17.7.0",
-        "prettier": "^3.9.6"
+        "prettier": "^3.9.6",
+        "typescript": "^7.0.2"
     }
 }
