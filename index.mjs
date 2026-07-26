@@ -44,6 +44,7 @@ export default function cardcatalog(indexes, opts = {}) {
             dataPath: './db',
             indexPath: './index',
             shouldIndex: () => true,
+            chokidar: {},
         },
         opts,
     );
@@ -271,8 +272,12 @@ export default function cardcatalog(indexes, opts = {}) {
     // initial sweep, and that doesn't count.
     let sweepDone = false;
 
+    // Passed through verbatim — the escape hatch for watcher tuning like
+    // awaitWriteFinish. Deliberately not defaulted: awaitWriteFinish holds
+    // initial-scan add events past chokidar's 'ready', which would make the
+    // first 'idle' fire before pre-existing documents are indexed.
     const watcher = chokidar
-        .watch(opts.dataPath)
+        .watch(opts.dataPath, opts.chokidar)
         .on('add', queueUpdate)
         .on('change', queueUpdate)
         .on('unlink', queueRemove)

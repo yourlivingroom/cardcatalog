@@ -3,22 +3,26 @@
 [![CI](https://github.com/yourlivingroom/cardcatalog/actions/workflows/ci.yml/badge.svg)](https://github.com/yourlivingroom/cardcatalog/actions/workflows/ci.yml)
 [![Coverage](https://raw.githubusercontent.com/yourlivingroom/cardcatalog/badges/coverage.svg)](https://github.com/yourlivingroom/cardcatalog/actions/workflows/ci.yml)
 
-Persistent, incrementally-maintained indexes over a directory of files.
+Persistent, incrementally-maintained LevelDB indexes over watched directory.
 
-You tell cardcatalog what cards to write for each document; it keeps the
-drawers sorted as documents come and go. Under the hood: [chokidar] watches the
-directory, your `process` function maps each file to index entries (in the
-style of a CouchDB map view), and each index is persisted in its own
-[LevelDB][classic-level] so lookups are fast and survive restarts.
+Point `cardcatalog` at a directory and provide one or more indexing functions,
+and it will watch contained files for changes and update indexes as needed.
+
+Under the hood: [chokidar] watches the directory and runs your `process`
+functions on each file as it appears or changes. Process functions emit index
+entries into a [LevelDB][classic-level] and existing index entries are replaced
+when a file updates. Indexes are thus similar to
+[CouchDB][couchdb].
 
 [chokidar]: https://github.com/paulmillr/chokidar
 [classic-level]: https://github.com/Level/classic-level
+[couchdb]: https://couchdb.apache.org/
 
 ## Quick start
 
 ```js
-import { once } from 'events';
 import cardcatalog from '@livingroom/cardcatalog';
+import { once } from 'events';
 
 const catalog = cardcatalog(
     {
@@ -87,6 +91,10 @@ poisons the rest of the catalog.
   missing).
 - `indexPath` — where the index databases live (default `'./index'`).
 - `shouldIndex(relPath, stats?)` — return false to skip a document.
+- `chokidar` — options passed verbatim to
+  [`chokidar.watch`](https://github.com/paulmillr/chokidar#api) for watcher
+  tuning (see
+  [Partially-written files](#partially-written-files)).
 
 ### The catalog
 
@@ -131,6 +139,28 @@ Matches yielded by `get`/`getMany`/`getRange` look like:
     readSync,   // (...args) => fs.readFileSync(<document>, ...args)
 }
 ```
+
+## Partially-written files
+
+The watcher can fire while a document is still being written, indexing half a
+file. The robust fix is on the writer's side: write to a temp file and
+`rename` it into the watched directory — renames are atomic, so the watcher
+only ever sees complete documents.
+
+If you don't control the writer, chokidar's `awaitWriteFinish` holds events
+until a file's size has been stable for a while:
+
+```js
+const catalog = cardcatalog(indexes, {
+    chokidar: { awaitWriteFinish: true },
+});
+```
+
+Two costs to know about: every watcher-driven update now lags by the
+stability threshold (2 seconds by default), and held initial-scan events
+arrive _after_ chokidar finishes enumerating — so the first `'idle'` can fire
+before pre-existing documents are indexed. Prefer write-then-rename when you
+can.
 
 ## Decoding is your job
 

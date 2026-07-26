@@ -44,5 +44,6 @@ Gotchas encoded in the source:
 
 - `KEY_BOTTOM`/`KEY_TOP` are locally defined as `null`/`undefined` because the npm release of charwise doesn't export its LO/HI sentinels.
 - `opts.dataPath` is `mkdirSync`'d before watching because chokidar won't reliably see files created in a directory that didn't exist when the watch began.
+- `opts.chokidar` is passed verbatim to `chokidar.watch`. `awaitWriteFinish` is deliberately NOT defaulted on: it holds initial-scan add events past chokidar's `'ready'`, which would make the first `'idle'` fire before pre-existing documents are indexed.
 
 Query results yield `{ key, path, indexValue, read(), readSync() }` where `path` is relative to `dataPath` but the read functions use the absolute path internally.

@@ -575,6 +575,45 @@ test('removing a quarantined document also resolves it', async (t) => {
     assert.deepEqual(resolveds, [{ index: 'words', path: 'doc1' }]);
 });
 
+test('chokidar options pass through to the watcher', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { chokidar: { ignored: (path) => path.endsWith('.tmp') } },
+    );
+
+    writeDoc(catalog, 'doc1', 'omega');
+    writeDoc(catalog, 'doc2.tmp', 'hidden');
+
+    await eventually(async () => {
+        assert.ok(await catalog.indexes.words.get('omega'), 'no match yet');
+    });
+    assert.equal(await catalog.indexes.words.get('hidden'), null);
+});
+
+test('awaitWriteFinish can be enabled through the chokidar opt', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        {
+            chokidar: {
+                awaitWriteFinish: {
+                    stabilityThreshold: 100,
+                    pollInterval: 20,
+                },
+            },
+        },
+    );
+
+    writeDoc(catalog, 'doc1', 'psi');
+
+    // Can't wait on 'idle' here: with awaitWriteFinish, add events are held
+    // past chokidar's ready, so the first idle may precede indexing.
+    await eventually(async () => {
+        assert.ok(await catalog.indexes.words.get('psi'), 'no match yet');
+    });
+});
+
 test('catalogs is a deprecated alias for indexes', async (t) => {
     const catalog = makeCatalog(t, { words: wordIndex });
 
