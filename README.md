@@ -112,6 +112,9 @@ may provide:
 - `chokidar` - options passed verbatim to
   [`chokidar.watch`](https://github.com/paulmillr/chokidar#getting-started) for
   watcher tuning (see [Partially-written files](#partially-written-files)).
+  Unused when `inline` is set.
+- `inline` - answer queries by scanning instead of keeping a stored index (see
+  [Inline mode](#inline-mode)).
 
 ### `catalog`
 
@@ -189,6 +192,37 @@ match?.indexValue.title; // string
 
 Without an annotation, `indexValue` is `unknown` rather than `any`, so it has
 to be narrowed. `Key` excludes `undefined`, matching the runtime guard.
+
+## Inline mode
+
+By default a catalog keeps its index in a LevelDB and watches the directory to
+maintain it. That is fast to query, but it runs a watcher and takes an
+exclusive lock on the index, so only one process at a time can hold it.
+
+`inline: true` keeps no stored index. Each query walks the collection and runs
+`process()` in memory:
+
+```js
+const catalog = cardcatalog(indexes, { dataPath: './db', inline: true });
+```
+
+No LevelDB, no watcher, no lock, and no writes at all - neither `dataPath` nor
+`indexPath` is created, so a collection on read-only media stays queryable.
+That makes it usable by a short-lived utility, a CLI, or a migration script
+running beside a live catalog over the same documents.
+
+Queries return the same results either way. Entries are keyed the same way a
+stored index keys them, so ordering, prefix and range semantics, quarantining,
+and every error message match. What differs is cost: a stored index answers
+with a range scan, while inline re-reads and re-processes the whole collection
+for each query. Fine for occasional lookups, wrong for a hot path.
+
+Three things have nothing to do in this mode, and say so rather than
+pretending: `close()` resolves immediately, `reindex()` reports whether the
+document would be indexed without doing any work, and `indexPath` is
+`undefined`. `'idle'` still fires once so `await once(catalog, 'idle')` works
+as a ready signal. `'problem'` and `'resolved'` are not emitted, because
+nothing is stored to transition between states - use `problems()`.
 
 ## Gotchas
 

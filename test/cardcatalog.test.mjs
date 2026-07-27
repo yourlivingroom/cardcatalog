@@ -119,6 +119,9 @@ test('invalid configs throw at construction', async (t) => {
     assert.throws(() => cardcatalog(words, { chokidar: 'quiet' }), {
         message: /chokidar must be an object/,
     });
+    assert.throws(() => cardcatalog(words, { inline: 'yes' }), {
+        message: /inline must be a boolean/,
+    });
 
     // Validation is side-effect-free: nothing was created on disk.
     const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
@@ -1226,4 +1229,383 @@ test('a throwing process() does not poison other documents', async (t) => {
 
     assert.equal(await catalog.indexes.words.get('boom'), null);
     assert.ok(await catalog.indexes.words.get('xi'));
+});
+
+// --- inline mode -----------------------------------------------------------
+
+// Every assertion runs against both modes from one fixture, so a divergence
+// between the stored index and the in-memory scan fails the suite.
+for (const inline of [false, true]) {
+    const mode = inline ? 'inline' : 'live';
+
+    async function seedParity(t) {
+        const catalog = makeCatalog(
+            t,
+            {
+                byTag: {
+                    valueEncoding: 'json',
+                    process: (content, emit) => {
+                        const doc = JSON.parse(content.toString('utf8'));
+                        if (doc.broken) throw new Error('cannot process');
+                        for (const tag of doc.tags ?? []) {
+                            emit(['tag', tag], doc.title);
+                        }
+                        emit(doc.title, doc.title);
+                    },
+                },
+            },
+            { inline },
+        );
+
+        for (const [name, doc] of [
+            ['a.json', { title: 'Alpha', tags: ['blue', 'red'] }],
+            ['b.json', { title: 'Beta', tags: ['red'] }],
+            ['sub/c.json', { title: 'Gamma', tags: ['zebra'] }],
+        ]) {
+            fs.mkdirSync(
+                pathLib.dirname(pathLib.join(catalog.dataPath, name)),
+                {
+                    recursive: true,
+                },
+            );
+            fs.writeFileSync(
+                pathLib.join(catalog.dataPath, name),
+                JSON.stringify(doc),
+            );
+            await catalog.reindex(name);
+        }
+        return catalog;
+    }
+
+    test(`${mode}: getRange walks bounds in charwise order`, async (t) => {
+        const catalog = await seedParity(t);
+        const keys = async (range) =>
+            (await collect(catalog.indexes.byTag.getRange(range))).map(
+                (m) => m.key,
+            );
+
+        assert.deepEqual(await keys({}), [
+            'Alpha',
+            'Beta',
+            'Gamma',
+            ['tag', 'blue'],
+            ['tag', 'red'],
+            ['tag', 'red'],
+            ['tag', 'zebra'],
+        ]);
+        assert.deepEqual(await keys({ gte: ['tag'] }), [
+            ['tag', 'blue'],
+            ['tag', 'red'],
+            ['tag', 'red'],
+            ['tag', 'zebra'],
+        ]);
+        assert.deepEqual(await keys({ gt: ['tag'] }), []);
+        assert.deepEqual(await keys({ lt: ['tag'] }), [
+            'Alpha',
+            'Beta',
+            'Gamma',
+        ]);
+        assert.deepEqual(await keys({ reverse: true, limit: 2 }), [
+            ['tag', 'zebra'],
+            ['tag', 'red'],
+        ]);
+        assert.deepEqual(await keys({ limit: 2 }), ['Alpha', 'Beta']);
+    });
+
+    test(`${mode}: getMany matches prefixes, scalars, and nesting`, async (t) => {
+        const catalog = await seedParity(t);
+        const paths = async (key) =>
+            (await collect(catalog.indexes.byTag.getMany(key)))
+                .map((m) => m.path)
+                .sort();
+
+        assert.deepEqual(await paths(['tag', 'red']), ['a.json', 'b.json']);
+        assert.deepEqual(await paths(['tag']), [
+            'a.json',
+            'a.json',
+            'b.json',
+            'sub/c.json',
+        ]);
+        assert.deepEqual(await paths('Alpha'), ['a.json']);
+        assert.deepEqual(await paths(['Alpha']), ['a.json']);
+        assert.deepEqual(await paths('absent'), []);
+    });
+
+    test(`${mode}: quarantined documents are reported, not indexed`, async (t) => {
+        const catalog = await seedParity(t);
+        fs.writeFileSync(
+            pathLib.join(catalog.dataPath, 'bad.json'),
+            JSON.stringify({ broken: true }),
+        );
+        await catalog.reindex('bad.json');
+
+        const problems = await collect(catalog.indexes.byTag.problems());
+        assert.deepEqual(
+            problems.map((p) => p.path),
+            ['bad.json'],
+        );
+        assert.equal(problems[0].message, 'cannot process');
+        assert.equal(typeof problems[0].at, 'string');
+
+        assert.deepEqual(
+            (await collect(catalog.indexes.byTag.getRange({}))).filter(
+                (m) => m.path === 'bad.json',
+            ),
+            [],
+        );
+    });
+
+    test(`${mode}: undefined is rejected in keys and bounds`, async (t) => {
+        const catalog = await seedParity(t);
+
+        await assert.rejects(
+            () => collect(catalog.indexes.byTag.getMany(['tag', undefined])),
+            /reserved as the range-scan sentinel/,
+        );
+        await assert.rejects(
+            () =>
+                collect(
+                    catalog.indexes.byTag.getRange({ gte: ['tag', undefined] }),
+                ),
+            /reserved as the range-scan sentinel/,
+        );
+    });
+
+    test(`${mode}: shouldIndex filters the same way`, async (t) => {
+        const catalog = makeCatalog(
+            t,
+            { words: wordIndex },
+            { inline, shouldIndex: (path) => !path.endsWith('.skip') },
+        );
+
+        // Inline mode never writes, so it does not create dataPath either.
+        fs.mkdirSync(catalog.dataPath, { recursive: true });
+        fs.writeFileSync(pathLib.join(catalog.dataPath, 'keep.json'), 'kept');
+        fs.writeFileSync(pathLib.join(catalog.dataPath, 'drop.skip'), 'gone');
+        await catalog.reindex('keep.json');
+
+        assert.ok(await catalog.indexes.words.get('kept'));
+        assert.equal(await catalog.indexes.words.get('gone'), null);
+        assert.equal(await catalog.reindex('drop.skip'), false);
+    });
+
+    test(`${mode}: idle fires as a ready signal`, async (t) => {
+        const catalog = makeCatalog(t, { words: wordIndex }, { inline });
+        await once(catalog, 'idle');
+        assert.ok(true);
+    });
+}
+
+test('inline: read, readSync, lte/lt bounds, and duplicate-key collapse', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        {
+            words: {
+                valueEncoding: 'json',
+                process: (content, emit) => {
+                    emit('dup', 'first');
+                    emit('dup', 'second'); // same stored key; last wins
+                    emit('other', 'x');
+                },
+            },
+        },
+        { inline: true },
+    );
+
+    fs.mkdirSync(catalog.dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'doc.json'), 'body');
+
+    const dup = await catalog.indexes.words.get('dup');
+    assert.equal(dup.indexValue, 'second');
+    assert.equal((await dup.read('utf8')).toString(), 'body');
+    assert.equal(dup.readSync('utf8'), 'body');
+
+    const keys = async (range) =>
+        (await collect(catalog.indexes.words.getRange(range))).map(
+            (m) => m.key,
+        );
+    assert.deepEqual(await keys({ lte: 'dup' }), ['dup']);
+    assert.deepEqual(await keys({ lt: 'other' }), ['dup']);
+});
+
+test('inline: get names the colliding documents', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: { process: (content, emit) => emit('shared', '') } },
+        { inline: true },
+    );
+
+    fs.mkdirSync(catalog.dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'a.json'), '1');
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'b.json'), '2');
+
+    await assert.rejects(
+        () => catalog.indexes.words.get('shared'),
+        /Multiple matches for "shared" in index "words": a\.json, b\.json/,
+    );
+});
+
+test('inline: reindex validates paths and reports filtering', async (t) => {
+    const catalog = makeCatalog(
+        t,
+        { words: wordIndex },
+        { inline: true, shouldIndex: (path) => !path.endsWith('.skip') },
+    );
+
+    fs.mkdirSync(catalog.dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'doc.json'), 'x');
+
+    assert.equal(await catalog.reindex('doc.json'), true);
+    assert.equal(await catalog.reindex('gone.json'), true); // absent, unfiltered
+    assert.equal(await catalog.reindex('gone.skip'), false); // absent, filtered
+
+    await assert.rejects(
+        () => catalog.reindex('../escaped'),
+        /outside dataPath/,
+    );
+});
+
+test('inline: tolerates a missing collection and surfaces real failures', async (t) => {
+    const missing = makeCatalog(t, { words: wordIndex }, { inline: true });
+
+    // Never created, so the walk finds nothing rather than failing.
+    assert.equal(fs.existsSync(missing.dataPath), false);
+    assert.deepEqual(await collect(missing.indexes.words.getRange({})), []);
+    assert.deepEqual(await collect(missing.indexes.words.problems()), []);
+
+    // A dataPath that is a file, not a directory, is a real error.
+    const broken = makeCatalog(t, { words: wordIndex }, { inline: true });
+    fs.mkdirSync(pathLib.dirname(broken.dataPath), { recursive: true });
+    fs.writeFileSync(broken.dataPath, 'not a directory');
+    await assert.rejects(() => collect(broken.indexes.words.getRange({})), {
+        code: 'ENOTDIR',
+    });
+});
+
+test('inline: skips entries that are not documents', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex }, { inline: true });
+    fs.mkdirSync(catalog.dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'real'), 'kept');
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'ghost'), 'gone');
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'weird'), 'odd');
+
+    const realStat = fs.promises.stat;
+    fs.promises.stat = async (p, ...rest) => {
+        // Vanished between readdir and stat.
+        if (String(p).endsWith('ghost')) {
+            throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+        }
+        // Something that is not a regular file, e.g. a symlinked directory.
+        if (String(p).endsWith('weird')) {
+            return { ...(await realStat(p, ...rest)), isFile: () => false };
+        }
+        return realStat(p, ...rest);
+    };
+    t.after(() => {
+        fs.promises.stat = realStat;
+    });
+
+    const paths = (await collect(catalog.indexes.words.getRange({}))).map(
+        (m) => m.path,
+    );
+    fs.promises.stat = realStat;
+    assert.deepEqual(paths, ['real']);
+});
+
+test('inline: a document vanishing before its read is skipped', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex }, { inline: true });
+    fs.mkdirSync(catalog.dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'keep'), 'kept');
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'racy'), 'gone');
+
+    const realRead = fs.promises.readFile;
+    fs.promises.readFile = async (p, ...rest) => {
+        if (String(p).endsWith('racy')) {
+            throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+        }
+        return realRead(p, ...rest);
+    };
+    t.after(() => {
+        fs.promises.readFile = realRead;
+    });
+
+    assert.deepEqual(
+        (await collect(catalog.indexes.words.getRange({}))).map((m) => m.path),
+        ['keep'],
+    );
+
+    // A read failure that is not a race still propagates.
+    fs.promises.readFile = async () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    };
+    await assert.rejects(() => collect(catalog.indexes.words.getRange({})), {
+        code: 'EACCES',
+    });
+    fs.promises.readFile = realRead;
+});
+
+test('inline: a stat failure during the walk propagates', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex }, { inline: true });
+    fs.mkdirSync(catalog.dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(catalog.dataPath, 'doc'), 'body');
+
+    const realStat = fs.promises.stat;
+    fs.promises.stat = async () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    };
+    t.after(() => {
+        fs.promises.stat = realStat;
+    });
+
+    await assert.rejects(() => collect(catalog.indexes.words.getRange({})), {
+        code: 'EACCES',
+    });
+    fs.promises.stat = realStat;
+});
+
+test('inline: reindex rethrows stat failures other than ENOENT', async (t) => {
+    const catalog = makeCatalog(t, { words: wordIndex }, { inline: true });
+
+    const realStat = fs.promises.stat;
+    fs.promises.stat = async () => {
+        throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    };
+    t.after(() => {
+        fs.promises.stat = realStat;
+    });
+
+    await assert.rejects(() => catalog.reindex('doc.json'), { code: 'EACCES' });
+    fs.promises.stat = realStat;
+});
+
+test('inline mode keeps no index and holds no lock', async (t) => {
+    const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+    const dataPath = pathLib.join(root, 'db');
+    const indexPath = pathLib.join(root, 'index');
+    fs.mkdirSync(dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(dataPath, 'doc.json'), 'shared');
+
+    // A live catalog holds an exclusive lock on its index; an inline one over
+    // the same documents must not contend with it.
+    const live = cardcatalog({ words: wordIndex }, { dataPath, indexPath });
+    const inline = cardcatalog(
+        { words: wordIndex },
+        { dataPath, indexPath, inline: true },
+    );
+    t.after(async () => {
+        await live.close();
+        await inline.close();
+        fs.rmSync(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 50,
+        });
+    });
+
+    await once(live, 'idle');
+    assert.ok(await inline.indexes.words.get('shared'));
+
+    // No index directory is created for it, and it reports none.
+    assert.equal(inline.indexPath, undefined);
 });

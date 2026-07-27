@@ -47,8 +47,15 @@ const catalog = cardcatalog(
             return !path.endsWith('.tmp') && stats?.isFile() !== false;
         },
         chokidar: { awaitWriteFinish: true },
+        inline: false,
     },
 );
+
+// Inline mode is just another option.
+cardcatalog({ words: { process: () => {} } }, { inline: true });
+
+// @ts-expect-error - inline is a boolean
+cardcatalog({ words: { process: () => {} } }, { inline: 'yes' });
 
 // The factory's return is a Catalog, and a Catalog is an EventEmitter.
 const asCatalog: Catalog = catalog;
@@ -177,7 +184,9 @@ catalog.on('idle', (payload: string) => {});
 
 async function surface() {
     type _DataPath = Expect<Equal<typeof catalog.dataPath, string>>;
-    type _IndexPath = Expect<Equal<typeof catalog.indexPath, string>>;
+    type _IndexPath = Expect<
+        Equal<typeof catalog.indexPath, string | undefined>
+    >;
 
     const reindexed = await catalog.reindex('doc1');
     type _Reindex = Expect<Equal<typeof reindexed, boolean>>;

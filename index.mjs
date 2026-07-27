@@ -117,6 +117,9 @@ function validateOpts(opts) {
     if (typeof opts.chokidar !== 'object' || opts.chokidar === null) {
         throw new TypeError('opts.chokidar must be an object');
     }
+    if (typeof opts.inline !== 'boolean') {
+        throw new TypeError('opts.inline must be a boolean');
+    }
 }
 
 export default function cardcatalog(indexes, opts = {}) {
@@ -128,6 +131,7 @@ export default function cardcatalog(indexes, opts = {}) {
             indexPath: './index',
             shouldIndex: () => true,
             chokidar: {},
+            inline: false,
         },
         opts,
     );
@@ -153,6 +157,12 @@ export default function cardcatalog(indexes, opts = {}) {
 
     function toAbsPath(relPath) {
         return pathLib.join(opts.dataPath, relPath);
+    }
+
+    // Inline mode reads and never writes, so it creates neither dataPath nor
+    // indexPath — a collection on read-only media stays queryable.
+    if (opts.inline) {
+        return inlineCatalog(indexes, opts, toRelPath, toAbsPath);
     }
 
     // Eagerly, before any database is constructed: classic-level would create
@@ -599,8 +609,14 @@ export default function cardcatalog(indexes, opts = {}) {
         },
     });
 
-    // Deprecated alias for `indexes`, kept for backward compatibility with
-    // existing projects.
+    attachCatalogsAlias(catalog, indexApis);
+
+    return catalog;
+}
+
+// Deprecated alias for `indexes`, kept for backward compatibility with
+// existing projects.
+function attachCatalogsAlias(catalog, indexApis) {
     Object.defineProperty(catalog, 'catalogs', {
         enumerable: false,
         get() {
@@ -615,8 +631,6 @@ export default function cardcatalog(indexes, opts = {}) {
             return indexApis;
         },
     });
-
-    return catalog;
 }
 
 function buildKey(id, x) {
@@ -625,4 +639,313 @@ function buildKey(id, x) {
 
 function normalizeKey(x) {
     return Array.isArray(x) ? x : [x];
+}
+
+// --- inline mode -----------------------------------------------------------
+//
+// A catalog with no stored index: each query walks the collection and runs
+// process() in memory. No LevelDB, no watcher, and no exclusive lock, so a
+// short-lived utility can run beside a live catalog over the same documents.
+//
+// The results are the ones a stored index would give. That is not a coincidence
+// to be maintained by hand: entries are keyed by the same
+// charwise.encode([...emittedKey, path]) a stored index writes, and charwise
+// encodings compare lexicographically in charwise order, so the same bounds and
+// the same sentinels reproduce the same ordering and the same subtree
+// semantics.
+
+// Yields dataPath-relative paths of the documents shouldIndex accepts. Uses
+// stat rather than the dirent so symlinks resolve, and so shouldIndex is handed
+// the same kind of stats a watcher event carries.
+async function* walkDocuments(dir, opts, toRelPath) {
+    let dirEntries;
+    try {
+        dirEntries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch (e) {
+        if (e.code === 'ENOENT') {
+            return;
+        }
+        throw e;
+    }
+
+    for (const dirEntry of dirEntries) {
+        const absPath = pathLib.join(dir, dirEntry.name);
+
+        if (dirEntry.isDirectory()) {
+            yield* walkDocuments(absPath, opts, toRelPath);
+            continue;
+        }
+
+        let stats;
+        try {
+            stats = await fs.promises.stat(absPath);
+        } catch (e) {
+            // Vanished mid-walk, or a broken symlink; either way, not a
+            // document.
+            if (e.code === 'ENOENT') {
+                continue;
+            }
+            throw e;
+        }
+
+        if (!stats.isFile()) {
+            continue;
+        }
+
+        const relPath = toRelPath(absPath);
+        if (opts.shouldIndex(relPath, stats)) {
+            yield relPath;
+        }
+    }
+}
+
+async function scanCollection(config, opts, toRelPath, toAbsPath) {
+    // Keyed by encoded stored key, so a document emitting one key twice
+    // collapses to its last value — both emits would be the same LevelDB key.
+    const byKey = new Map();
+    const problems = [];
+
+    for await (const relPath of walkDocuments(opts.dataPath, opts, toRelPath)) {
+        const absPath = toAbsPath(relPath);
+
+        let content;
+        try {
+            content = await fs.promises.readFile(absPath);
+        } catch (e) {
+            if (e.code === 'ENOENT') {
+                continue;
+            }
+            throw e;
+        }
+
+        const emitted = [];
+        try {
+            await config.process(
+                content,
+                (k, v) => {
+                    assertNoUndefined(k, 'emitted key');
+                    emitted.push([normalizeKey(k), v]);
+                },
+                { path: relPath },
+            );
+        } catch (e) {
+            // Quarantine is all-or-nothing here too: whatever this document
+            // emitted before throwing is discarded.
+            problems.push({
+                path: relPath,
+                at: new Date().toISOString(),
+                message: e.message,
+                stack: e.stack,
+            });
+            continue;
+        }
+
+        for (const [key, indexValue] of emitted) {
+            const encoded = charwise.encode([...key, relPath]);
+            byKey.set(encoded, {
+                encoded,
+                // A single-element key reports as the scalar itself, which is
+                // what unpacking a stored key produces.
+                key: key.length === 1 ? key[0] : key,
+                path: relPath,
+                indexValue,
+                absPath,
+            });
+        }
+    }
+
+    // Encodings are unique after the dedupe above, so a two-way compare
+    // suffices to put them in charwise order.
+    const entries = [...byKey.values()].sort((a, b) =>
+        a.encoded < b.encoded ? -1 : 1,
+    );
+    return { entries, problems };
+}
+
+function withinBounds(encoded, bounds) {
+    if (bounds.gte !== undefined && encoded < bounds.gte) return false;
+    if (bounds.gt !== undefined && encoded <= bounds.gt) return false;
+    if (bounds.lte !== undefined && encoded > bounds.lte) return false;
+    if (bounds.lt !== undefined && encoded >= bounds.lt) return false;
+    return true;
+}
+
+async function* scanRange(config, opts, toRelPath, toAbsPath, bounds, page) {
+    const { entries } = await scanCollection(
+        config,
+        opts,
+        toRelPath,
+        toAbsPath,
+    );
+
+    let selected = entries.filter((e) => withinBounds(e.encoded, bounds));
+    if (page.reverse) {
+        selected.reverse();
+    }
+    if (page.limit !== undefined) {
+        selected = selected.slice(0, page.limit);
+    }
+
+    for (const entry of selected) {
+        yield {
+            key: entry.key,
+            path: entry.path,
+            indexValue: entry.indexValue,
+            read(...args) {
+                return fs.promises.readFile(entry.absPath, ...args);
+            },
+            readSync(...args) {
+                return fs.readFileSync(entry.absPath, ...args);
+            },
+        };
+    }
+}
+
+function inlineCatalog(indexes, opts, toRelPath, toAbsPath) {
+    const indexApis = Object.fromEntries(
+        Object.entries(indexes).map(([indexName, config]) => [
+            indexName,
+            {
+                async get(key) {
+                    let result = null;
+
+                    for await (const match of this.getMany(key)) {
+                        if (result) {
+                            throw new Error(
+                                'Multiple matches for ' +
+                                    JSON.stringify(key) +
+                                    ' in index ' +
+                                    JSON.stringify(indexName) +
+                                    ': ' +
+                                    result.path +
+                                    ', ' +
+                                    match.path,
+                            );
+                        }
+
+                        result = match;
+                    }
+
+                    return result;
+                },
+
+                async *getMany(queryKey) {
+                    assertNoUndefined(queryKey, 'query key');
+                    const key = normalizeKey(queryKey);
+                    yield* scanRange(
+                        config,
+                        opts,
+                        toRelPath,
+                        toAbsPath,
+                        {
+                            gte: charwise.encode([...key, KEY_BOTTOM]),
+                            lte: charwise.encode([...key, KEY_TOP]),
+                        },
+                        {},
+                    );
+                },
+
+                async *getRange(range = {}) {
+                    const bounds = {};
+
+                    for (const bound of ['gt', 'gte', 'lt', 'lte']) {
+                        if (range[bound] !== undefined) {
+                            assertNoUndefined(range[bound], 'range bound');
+                        }
+                    }
+
+                    if (range.gte !== undefined) {
+                        bounds.gte = charwise.encode([
+                            ...normalizeKey(range.gte),
+                            KEY_BOTTOM,
+                        ]);
+                    }
+                    if (range.gt !== undefined) {
+                        bounds.gt = charwise.encode([
+                            ...normalizeKey(range.gt),
+                            KEY_TOP,
+                        ]);
+                    }
+                    if (range.lte !== undefined) {
+                        bounds.lte = charwise.encode([
+                            ...normalizeKey(range.lte),
+                            KEY_TOP,
+                        ]);
+                    }
+                    if (range.lt !== undefined) {
+                        bounds.lt = charwise.encode([
+                            ...normalizeKey(range.lt),
+                            KEY_BOTTOM,
+                        ]);
+                    }
+
+                    yield* scanRange(
+                        config,
+                        opts,
+                        toRelPath,
+                        toAbsPath,
+                        bounds,
+                        { reverse: range.reverse, limit: range.limit },
+                    );
+                },
+
+                // Nothing is quarantined persistently here, so this reports
+                // what fails right now rather than what was recorded when it
+                // first failed. For the same reason no 'problem' or 'resolved'
+                // events are emitted: there is no stored state to transition.
+                async *problems() {
+                    const { problems } = await scanCollection(
+                        config,
+                        opts,
+                        toRelPath,
+                        toAbsPath,
+                    );
+                    yield* problems;
+                },
+            },
+        ]),
+    );
+
+    const catalog = Object.assign(new EventEmitter(), {
+        indexes: indexApis,
+
+        close: async () => {},
+
+        dataPath: opts.dataPath,
+
+        // No index databases exist, so there is no location to report.
+        indexPath: undefined,
+
+        // Queries already read the current state of every document, so there
+        // is nothing to fold in. Still resolves the same boolean a stored
+        // catalog would, so callers need not know which mode they are in.
+        async reindex(path) {
+            const relPath = toRelPath(path);
+            if (relPath.startsWith('..') || pathLib.isAbsolute(relPath)) {
+                throw new Error('reindex path is outside dataPath: ' + path);
+            }
+
+            let stats;
+            try {
+                stats = await retryingEperm(() =>
+                    fs.promises.stat(toAbsPath(relPath)),
+                );
+            } catch (e) {
+                if (e.code === 'ENOENT') {
+                    return opts.shouldIndex(relPath);
+                }
+                throw e;
+            }
+            return opts.shouldIndex(relPath, stats);
+        },
+    });
+
+    attachCatalogsAlias(catalog, indexApis);
+
+    // There is no sweep and no queue, so the catalog is quiescent from the
+    // start. Emitting once on the next tick keeps `await once(catalog,
+    // 'idle')` working as the ready signal it is in live mode.
+    setImmediate(() => catalog.emit('idle'));
+
+    return catalog;
 }

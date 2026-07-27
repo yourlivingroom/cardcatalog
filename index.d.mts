@@ -40,8 +40,22 @@ export interface CatalogOptions {
     /** Return false to skip a document. `path` is dataPath-relative. */
     shouldIndex?(path: string, stats?: Stats): boolean;
 
-    /** Passed verbatim to `chokidar.watch`. */
+    /** Passed verbatim to `chokidar.watch`. Unused when `inline` is set. */
     chokidar?: ChokidarOptions;
+
+    /**
+     * Answer queries by scanning the collection and running `process` in
+     * memory, instead of maintaining a stored index. No LevelDB, no watcher,
+     * and no exclusive lock, so a short-lived utility can run beside a live
+     * catalog over the same documents. Queries return the same results.
+     *
+     * Reads only: neither `dataPath` nor `indexPath` is created, so a
+     * collection on read-only media stays queryable. `close()` and `reindex()`
+     * have nothing to do, `indexPath` reports `undefined`, and `'problem'` and
+     * `'resolved'` are not emitted, since there is no stored state to
+     * transition — use `problems()`.
+     */
+    inline?: boolean;
 }
 
 /** One entry from `get`, `getMany`, or `getRange`. */
@@ -209,8 +223,8 @@ export interface Catalog<
     /** The resolved absolute watch root. */
     readonly dataPath: string;
 
-    /** Where the index databases live. */
-    readonly indexPath: string;
+    /** Where the index databases live; `undefined` in inline mode. */
+    readonly indexPath: string | undefined;
 
     /**
      * "This document changed — do the usual thing for it, now." Handles the
