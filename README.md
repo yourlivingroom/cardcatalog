@@ -115,6 +115,12 @@ may provide:
   Unused when `inline` is set.
 - `inline` - answer queries by scanning instead of keeping a stored index (see
   [Inline mode](#inline-mode)).
+- `watch` - default `true`. Set `false` to keep a stored index but **not** watch
+  the directory: the index then updates only when you drive it, via `reindex()`
+  (or an equivalent), never on its own. Useful when you want deterministic
+  control over index freshness — e.g. to reproduce watcher lag on demand, or to
+  reindex in explicit batches — rather than the background watcher's eventual
+  consistency. Ignored when `inline` is set.
 
 ### `catalog`
 

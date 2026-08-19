@@ -120,6 +120,9 @@ function validateOpts(opts) {
     if (typeof opts.inline !== 'boolean') {
         throw new TypeError('opts.inline must be a boolean');
     }
+    if (typeof opts.watch !== 'boolean') {
+        throw new TypeError('opts.watch must be a boolean');
+    }
 }
 
 export default function cardcatalog(indexes, opts = {}) {
@@ -132,6 +135,7 @@ export default function cardcatalog(indexes, opts = {}) {
             shouldIndex: () => true,
             chokidar: {},
             inline: false,
+            watch: true,
         },
         opts,
     );
@@ -415,22 +419,36 @@ export default function cardcatalog(indexes, opts = {}) {
     // initial sweep, and that doesn't count.
     let sweepDone = false;
 
-    // Passed through verbatim — the escape hatch for watcher tuning like
-    // awaitWriteFinish. Deliberately not defaulted: awaitWriteFinish holds
-    // initial-scan add events past chokidar's 'ready', which would make the
-    // first 'idle' fire before pre-existing documents are indexed.
-    const watcher = chokidar
-        .watch(opts.dataPath, opts.chokidar)
-        .on('add', queueUpdate)
-        .on('change', queueUpdate)
-        .on('unlink', queueRemove)
-        .on('error', emitError)
-        .on('ready', () => {
-            sweepDone = true;
-            if (queue.size === 0 && queue.pending === 0) {
-                catalog.emit('idle');
-            }
-        });
+    // `watch: false` builds a persistent index that updates ONLY when the caller
+    // drives reindex() — no chokidar, so the index never changes on its own.
+    // It's the live LevelDB path minus the watcher: exact materialization and
+    // real staleness, but with the clock in the caller's hand. Nothing sweeps in
+    // the initial contents, so a document written before its reindex() (or before
+    // any reindex at all) simply isn't indexed yet — which is the point: a
+    // caller can reproduce eventual-consistency lag deterministically. With no
+    // sweep to wait for, the catalog is 'ready' immediately, so queue-driven
+    // 'idle' can fire from the first reindex.
+    let watcher = null;
+    if (opts.watch) {
+        // Passed through verbatim — the escape hatch for watcher tuning like
+        // awaitWriteFinish. Deliberately not defaulted: awaitWriteFinish holds
+        // initial-scan add events past chokidar's 'ready', which would make the
+        // first 'idle' fire before pre-existing documents are indexed.
+        watcher = chokidar
+            .watch(opts.dataPath, opts.chokidar)
+            .on('add', queueUpdate)
+            .on('change', queueUpdate)
+            .on('unlink', queueRemove)
+            .on('error', emitError)
+            .on('ready', () => {
+                sweepDone = true;
+                if (queue.size === 0 && queue.pending === 0) {
+                    catalog.emit('idle');
+                }
+            });
+    } else {
+        sweepDone = true;
+    }
 
     queue.on('idle', () => {
         if (sweepDone) {
@@ -563,7 +581,7 @@ export default function cardcatalog(indexes, opts = {}) {
     const catalog = Object.assign(new EventEmitter(), {
         indexes: indexApis,
         close: async () => {
-            await watcher.close();
+            if (watcher) await watcher.close();
             await queue.onIdle();
             await Promise.all(Object.values(indexDbs).map((db) => db.close()));
         },

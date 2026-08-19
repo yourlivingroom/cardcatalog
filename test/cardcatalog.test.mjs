@@ -122,6 +122,9 @@ test('invalid configs throw at construction', async (t) => {
     assert.throws(() => cardcatalog(words, { inline: 'yes' }), {
         message: /inline must be a boolean/,
     });
+    assert.throws(() => cardcatalog(words, { watch: 'yes' }), {
+        message: /watch must be a boolean/,
+    });
 
     // Validation is side-effect-free: nothing was created on disk.
     const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
@@ -1608,4 +1611,56 @@ test('inline mode keeps no index and holds no lock', async (t) => {
 
     // No index directory is created for it, and it reports none.
     assert.equal(inline.indexPath, undefined);
+});
+
+test('watch:false — a persistent index that updates only on reindex', async (t) => {
+    // The live LevelDB path minus the chokidar watcher: the index never changes
+    // on its own, so a caller can reproduce eventual-consistency lag (and
+    // stale-on-delete) deterministically, no polling.
+    const catalog = makeCatalog(t, { words: wordIndex }, { watch: false });
+
+    const path = writeDoc(catalog, 'doc1', 'hello world');
+    // Written but not yet reindexed → invisible. Deterministic: nothing sweeps.
+    assert.equal(await catalog.indexes.words.get('hello'), null);
+
+    // The caller drives visibility.
+    assert.equal(await catalog.reindex(path), true);
+    const m = await catalog.indexes.words.get('hello');
+    assert.equal(m.path, 'doc1');
+
+    // A delete is likewise deferred: the entry stays stale until reindex.
+    fs.rmSync(path);
+    assert.ok(
+        await catalog.indexes.words.get('hello'),
+        'still indexed (stale)',
+    );
+    assert.equal(await catalog.reindex(path), true);
+    assert.equal(await catalog.indexes.words.get('hello'), null);
+});
+
+test('watch:false — a persistent index survives reopen (real materialization)', async (t) => {
+    // Not inline: the index is a real LevelDB on disk, so what one instance
+    // reindexes, a later instance over the same paths can read back.
+    const root = fs.mkdtempSync(pathLib.join(os.tmpdir(), 'cardcatalog-'));
+    const dataPath = pathLib.join(root, 'db');
+    const indexPath = pathLib.join(root, 'index');
+    t.after(() =>
+        fs.rmSync(root, { recursive: true, force: true, maxRetries: 10 }),
+    );
+
+    const first = cardcatalog(
+        { words: wordIndex },
+        { dataPath, indexPath, watch: false },
+    );
+    fs.mkdirSync(dataPath, { recursive: true });
+    fs.writeFileSync(pathLib.join(dataPath, 'doc1'), 'persistent');
+    await first.reindex(pathLib.join(dataPath, 'doc1'));
+    await first.close();
+
+    const second = cardcatalog(
+        { words: wordIndex },
+        { dataPath, indexPath, watch: false },
+    );
+    t.after(() => second.close());
+    assert.ok(await second.indexes.words.get('persistent'));
 });
