@@ -48,6 +48,7 @@ const catalog = cardcatalog(
         },
         chokidar: { awaitWriteFinish: true },
         inline: false,
+        watch: true,
     },
 );
 
@@ -56,6 +57,12 @@ cardcatalog({ words: { process: () => {} } }, { inline: true });
 
 // @ts-expect-error - inline is a boolean
 cardcatalog({ words: { process: () => {} } }, { inline: 'yes' });
+
+// So is watch:false.
+cardcatalog({ words: { process: () => {} } }, { watch: false });
+
+// @ts-expect-error - watch is a boolean
+cardcatalog({ words: { process: () => {} } }, { watch: 'no' });
 
 // The factory's return is a Catalog, and a Catalog is an EventEmitter.
 const asCatalog: Catalog = catalog;

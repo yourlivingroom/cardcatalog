@@ -56,6 +56,13 @@ export interface CatalogOptions {
      * transition — use `problems()`.
      */
     inline?: boolean;
+
+    /**
+     * Default `true`. Set `false` to keep a stored index but not watch the
+     * directory: the index updates only when driven via `reindex()`, never on
+     * its own. Ignored when `inline` is set.
+     */
+    watch?: boolean;
 }
 
 /** One entry from `get`, `getMany`, or `getRange`. */
